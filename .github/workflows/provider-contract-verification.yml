@@ -1,0 +1,147 @@
+# ============================================================================
+# GitHub Actions: Provider Contract Verification
+# ============================================================================
+# Verifies that the NIOP Beat Inventory API (Provider) satisfies all 
+# consumer contracts published to the Pact Broker.
+#
+# This workflow is triggered:
+#   - On changes to the provider code
+#   - Via webhook from Pact Broker when new consumer pacts are published
+#   - Manual dispatch for on-demand verification
+#
+# This is the CRITICAL gate - if provider verification fails, the NIOP team
+# knows their API changes will break consuming systems.
+# ============================================================================
+
+name: Provider Contract Verification
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/Provider/**'
+      - 'src/Shared/**'
+      - '.github/workflows/provider-contract-verification.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/Provider/**'
+      - 'src/Shared/**'
+  
+  # Triggered by Pact Broker webhook when new consumer pacts are published
+  repository_dispatch:
+    types: [pact-changed]
+  
+  workflow_dispatch:
+    inputs:
+      pact_url:
+        description: 'Pact URL to verify (optional - verifies all if empty)'
+        required: false
+        type: string
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+  PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+
+jobs:
+  # ==========================================================================
+  # Provider Verification
+  # ==========================================================================
+  verify-provider:
+    name: Verify Provider Contracts
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore dependencies
+        run: dotnet restore src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj
+
+      - name: Build provider
+        run: dotnet build src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj --no-restore --configuration Release
+
+      - name: Run provider verification tests
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+          PROVIDER_VERSION: ${{ github.sha }}
+          GIT_BRANCH: ${{ github.ref_name }}
+          PACT_URL: ${{ github.event.inputs.pact_url || github.event.client_payload.pact_url || '' }}
+        run: |
+          dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj \
+            --configuration Release \
+            --logger "trx;LogFileName=provider-verification-results.trx" \
+            --results-directory ./test-results \
+            --verbosity normal
+
+      - name: Upload verification results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-verification-results
+          path: ./test-results/
+          retention-days: 30
+
+      - name: Install Pact CLI
+        if: env.PACT_BROKER_BASE_URL != ''
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/pact-foundation/pact-ruby-standalone/master/install.sh | PACT_CLI_VERSION=v2.4.2 bash
+          echo "$HOME/pact/bin" >> $GITHUB_PATH
+
+      - name: Record deployment (can-i-deploy)
+        if: env.PACT_BROKER_BASE_URL != '' && github.ref == 'refs/heads/main'
+        run: |
+          pact-broker can-i-deploy \
+            --pacticipant="NIOP-Beat-Inventory-Api" \
+            --version="${{ github.sha }}" \
+            --to-environment="production" \
+            --broker-base-url="${{ secrets.PACT_BROKER_BASE_URL }}" \
+            --broker-token="${{ secrets.PACT_BROKER_TOKEN }}"
+
+      - name: Record release to production
+        if: env.PACT_BROKER_BASE_URL != '' && github.ref == 'refs/heads/main'
+        run: |
+          pact-broker record-release \
+            --pacticipant="NIOP-Beat-Inventory-Api" \
+            --version="${{ github.sha }}" \
+            --environment="production" \
+            --broker-base-url="${{ secrets.PACT_BROKER_BASE_URL }}" \
+            --broker-token="${{ secrets.PACT_BROKER_TOKEN }}" || true
+
+  # ==========================================================================
+  # Notify on Failure
+  # ==========================================================================
+  notify-failure:
+    name: Notify on Contract Failure
+    runs-on: ubuntu-latest
+    needs: verify-provider
+    if: failure()
+    steps:
+      - name: Create failure summary
+        run: |
+          echo "## ❌ Provider Contract Verification Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The NIOP Beat Inventory API has failed to satisfy one or more consumer contracts." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Affected Consumers" >> $GITHUB_STEP_SUMMARY
+          echo "The following systems may be impacted:" >> $GITHUB_STEP_SUMMARY
+          echo "- Salesforce" >> $GITHUB_STEP_SUMMARY
+          echo "- PCAW" >> $GITHUB_STEP_SUMMARY
+          echo "- Soraian" >> $GITHUB_STEP_SUMMARY
+          echo "- MSA" >> $GITHUB_STEP_SUMMARY
+          echo "- INR" >> $GITHUB_STEP_SUMMARY
+          echo "- ATS" >> $GITHUB_STEP_SUMMARY
+          echo "- Cardiologs" >> $GITHUB_STEP_SUMMARY
+          echo "- EMR" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Action Required" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review the test results in the Artifacts section" >> $GITHUB_STEP_SUMMARY
+          echo "2. Check the Pact Broker for detailed contract comparison" >> $GITHUB_STEP_SUMMARY
+          echo "3. Coordinate with affected consumer teams before merging" >> $GITHUB_STEP_SUMMARY

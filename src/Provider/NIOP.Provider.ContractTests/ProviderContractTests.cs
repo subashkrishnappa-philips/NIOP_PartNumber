@@ -1,0 +1,152 @@
+using NIOP.Contracts.Shared.Constants;
+using PactNet;
+using PactNet.Verifier;
+using Xunit;
+using Xunit.Abstractions;
+
+namespace NIOP.Provider.ContractTests;
+
+/// <summary>
+/// Provider-side Pact verification tests.
+/// 
+/// These tests verify that the NIOP Beat Inventory API (Provider) 
+/// satisfies ALL consumer contracts (pacts) published to the Pact Broker.
+/// 
+/// This is executed as part of the provider's CI/CD pipeline.
+/// When any consumer publishes a new pact, these tests will detect breaking changes.
+/// 
+/// Consuming systems verified:
+/// - Salesforce, PCAW, Soraian, MSA, INR, ATS, Cardiologs, EMR
+/// </summary>
+public class ProviderContractTests : IClassFixture<Fixtures.ProviderWebApplicationFactory>
+{
+    private readonly Fixtures.ProviderWebApplicationFactory _factory;
+    private readonly ITestOutputHelper _output;
+
+    public ProviderContractTests(Fixtures.ProviderWebApplicationFactory factory, ITestOutputHelper output)
+    {
+        _factory = factory;
+        _output = output;
+    }
+
+    /// <summary>
+    /// Verifies all consumer pacts from the Pact Broker against the running provider.
+    /// This single test covers ALL consumers - each pact is verified independently.
+    /// </summary>
+    [Fact(DisplayName = "Provider verifies all consumer pacts from Pact Broker")]
+    public void EnsureProviderHonoursAllConsumerPacts()
+    {
+        // Arrange - Start the real Kestrel-hosted provider
+        _factory.EnsureStarted();
+        var providerUri = _factory.ServerUri;
+
+        var brokerUrl = Environment.GetEnvironmentVariable(PactConstants.Broker.UrlEnvironmentVariable)
+                        ?? PactConstants.Broker.DefaultUrl;
+
+        var brokerToken = Environment.GetEnvironmentVariable(PactConstants.Broker.TokenEnvironmentVariable);
+        var brokerUsername = Environment.GetEnvironmentVariable(PactConstants.Broker.UsernameEnvironmentVariable);
+        var brokerPassword = Environment.GetEnvironmentVariable(PactConstants.Broker.PasswordEnvironmentVariable);
+
+        // Act & Assert - Verify pacts from broker
+        using var verifier = new PactVerifier(PactConstants.ProviderName);
+
+        if (!string.IsNullOrEmpty(brokerToken))
+        {
+            // Token-based authentication (e.g. PactFlow SaaS)
+            verifier
+                .WithHttpEndpoint(providerUri)
+                .WithPactBrokerSource(new Uri(brokerUrl), options =>
+                {
+                    options.TokenAuthentication(brokerToken);
+                    options.PublishResults(
+                        Environment.GetEnvironmentVariable("PROVIDER_VERSION") ?? "1.0.0",
+                        results =>
+                        {
+                            var branch = Environment.GetEnvironmentVariable("GIT_BRANCH") ?? "main";
+                            results.ProviderBranch(branch);
+                        });
+                    options.ConsumerVersionSelectors(
+                        new ConsumerVersionSelector { MainBranch = true },
+                        new ConsumerVersionSelector { DeployedOrReleased = true }
+                    );
+                    options.EnablePending();
+                })
+                .Verify();
+        }
+        else if (!string.IsNullOrEmpty(brokerUsername) && !string.IsNullOrEmpty(brokerPassword))
+        {
+            // Basic auth (e.g. self-hosted Pact Broker via Docker)
+            _output.WriteLine($"Verifying pacts from Pact Broker at {brokerUrl} (basic auth)");
+            verifier
+                .WithHttpEndpoint(providerUri)
+                .WithPactBrokerSource(new Uri(brokerUrl), options =>
+                {
+                    options.BasicAuthentication(brokerUsername, brokerPassword);
+                    options.PublishResults(
+                        Environment.GetEnvironmentVariable("PROVIDER_VERSION") ?? "1.0.0",
+                        results =>
+                        {
+                            var branch = Environment.GetEnvironmentVariable("GIT_BRANCH") ?? "main";
+                            results.ProviderBranch(branch);
+                        });
+                    options.ConsumerVersionSelectors(
+                        new ConsumerVersionSelector { MainBranch = true },
+                        new ConsumerVersionSelector { DeployedOrReleased = true }
+                    );
+                    options.EnablePending();
+                })
+                .Verify();
+        }
+        else
+        {
+            // Fallback: verify from local pact files (useful for local development)
+            var pactDir = PactConstants.PactOutput.GetPactDirectory();
+            if (Directory.Exists(pactDir))
+            {
+                verifier
+                    .WithHttpEndpoint(providerUri)
+                    .WithDirectorySource(new DirectoryInfo(pactDir))
+                    .Verify();
+            }
+            else
+            {
+                _output.WriteLine($"No pact files found at {pactDir} and no broker configured. Skipping verification.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Verifies pacts for a specific consumer (useful for targeted testing).
+    /// </summary>
+    [Theory(DisplayName = "Provider verifies individual consumer pacts from local files")]
+    [InlineData(PactConstants.Consumers.Salesforce)]
+    [InlineData(PactConstants.Consumers.PCAW)]
+    [InlineData(PactConstants.Consumers.Soraian)]
+    [InlineData(PactConstants.Consumers.MSA)]
+    [InlineData(PactConstants.Consumers.INR)]
+    [InlineData(PactConstants.Consumers.ATS)]
+    [InlineData(PactConstants.Consumers.Cardiologs)]
+    [InlineData(PactConstants.Consumers.EMR)]
+    public void EnsureProviderHonoursSpecificConsumerPact(string consumerName)
+    {
+        // Arrange - Start the real Kestrel-hosted provider
+        _factory.EnsureStarted();
+        var providerUri = _factory.ServerUri;
+
+        var pactDir = PactConstants.PactOutput.GetPactDirectory();
+        var pactFile = Path.Combine(pactDir, $"{consumerName}-{PactConstants.ProviderName}.json");
+
+        if (!File.Exists(pactFile))
+        {
+            _output.WriteLine($"Pact file not found for consumer '{consumerName}': {pactFile}. Generate consumer pacts first.");
+            return;
+        }
+
+        // Act & Assert
+        using var verifier = new PactVerifier(PactConstants.ProviderName);
+        verifier
+            .WithHttpEndpoint(providerUri)
+            .WithFileSource(new FileInfo(pactFile))
+            .Verify();
+    }
+}

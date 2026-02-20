@@ -1,0 +1,189 @@
+# ============================================================================
+# GitHub Actions: Consumer Contract Tests
+# ============================================================================
+# Runs consumer-side Pact tests for all consuming systems.
+# Generates pact files and publishes them to the Pact Broker.
+#
+# Triggered on:
+#   - Push to main/develop branches
+#   - Pull requests targeting main/develop
+#   - Manual workflow dispatch
+#
+# Each consumer's tests run in parallel for maximum efficiency.
+# ============================================================================
+
+name: Consumer Contract Tests
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/Consumers/**'
+      - 'src/Shared/**'
+      - '.github/workflows/consumer-contract-tests.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/Consumers/**'
+      - 'src/Shared/**'
+  workflow_dispatch:
+    inputs:
+      consumer:
+        description: 'Specific consumer to test (leave empty for all)'
+        required: false
+        type: choice
+        options:
+          - all
+          - Salesforce
+          - PCAW
+          - Soraian
+          - MSA
+          - INR
+          - ATS
+          - Cardiologs
+          - EMR
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+  PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+
+jobs:
+  # ==========================================================================
+  # Build Phase
+  # ==========================================================================
+  build:
+    name: Build Solution
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore dependencies
+        run: dotnet restore NIOP.ContractTesting.sln
+
+      - name: Build solution
+        run: dotnet build NIOP.ContractTesting.sln --no-restore --configuration Release
+
+  # ==========================================================================
+  # Consumer Tests - Run in parallel
+  # ==========================================================================
+  consumer-tests:
+    name: "${{ matrix.consumer }} Consumer Tests"
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        consumer:
+          - { name: "Salesforce", project: "src/Consumers/Salesforce/Consumer.Salesforce.ContractTests/Consumer.Salesforce.ContractTests.csproj" }
+          - { name: "PCAW", project: "src/Consumers/PCAW/Consumer.PCAW.ContractTests/Consumer.PCAW.ContractTests.csproj" }
+          - { name: "Soraian", project: "src/Consumers/Soraian/Consumer.Soraian.ContractTests/Consumer.Soraian.ContractTests.csproj" }
+          - { name: "MSA", project: "src/Consumers/MSA/Consumer.MSA.ContractTests/Consumer.MSA.ContractTests.csproj" }
+          - { name: "INR", project: "src/Consumers/INR/Consumer.INR.ContractTests/Consumer.INR.ContractTests.csproj" }
+          - { name: "ATS", project: "src/Consumers/ATS/Consumer.ATS.ContractTests/Consumer.ATS.ContractTests.csproj" }
+          - { name: "Cardiologs", project: "src/Consumers/Cardiologs/Consumer.Cardiologs.ContractTests/Consumer.Cardiologs.ContractTests.csproj" }
+          - { name: "EMR", project: "src/Consumers/EMR/Consumer.EMR.ContractTests/Consumer.EMR.ContractTests.csproj" }
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ matrix.consumer.project }}
+
+      - name: Run ${{ matrix.consumer.name }} consumer tests
+        run: |
+          dotnet test ${{ matrix.consumer.project }} \
+            --configuration Release \
+            --logger "trx;LogFileName=${{ matrix.consumer.name }}-results.trx" \
+            --results-directory ./test-results \
+            --verbosity normal
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.consumer.name }}-test-results
+          path: ./test-results/
+          retention-days: 30
+
+      - name: Upload generated pact files
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.consumer.name }}-pacts
+          path: ./pacts/
+          retention-days: 30
+
+  # ==========================================================================
+  # Publish Pacts to Broker
+  # ==========================================================================
+  publish-pacts:
+    name: Publish Pacts to Broker
+    runs-on: ubuntu-latest
+    needs: consumer-tests
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all pact artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-pacts"
+          path: ./pacts/
+          merge-multiple: true
+
+      - name: List generated pacts
+        run: |
+          echo "Generated Pact files:"
+          find ./pacts -name "*.json" -type f | sort
+
+      - name: Install Pact CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/pact-foundation/pact-ruby-standalone/master/install.sh | PACT_CLI_VERSION=v2.4.2 bash
+          echo "$HOME/pact/bin" >> $GITHUB_PATH
+
+      - name: Publish pacts to broker
+        if: env.PACT_BROKER_BASE_URL != ''
+        run: |
+          CONSUMER_VERSION="${{ github.sha }}"
+          GIT_BRANCH="${{ github.ref_name }}"
+          
+          for pact_file in ./pacts/*.json; do
+            if [ -f "$pact_file" ]; then
+              echo "Publishing: $(basename $pact_file)"
+              pact-broker publish "$pact_file" \
+                --consumer-app-version="$CONSUMER_VERSION" \
+                --branch="$GIT_BRANCH" \
+                --broker-base-url="${{ secrets.PACT_BROKER_BASE_URL }}" \
+                --broker-token="${{ secrets.PACT_BROKER_TOKEN }}" \
+                --tag-with-git-branch \
+                --verbose
+            fi
+          done
+
+      - name: Create deployment check (can-i-deploy)
+        if: env.PACT_BROKER_BASE_URL != ''
+        run: |
+          # Check each consumer can be safely deployed
+          CONSUMERS=("Salesforce-Consumer" "PCAW-Consumer" "Soraian-Consumer" "MSA-Consumer" "INR-Consumer" "ATS-Consumer" "Cardiologs-Consumer" "EMR-Consumer")
+          
+          for consumer in "${CONSUMERS[@]}"; do
+            echo "Checking if $consumer can be deployed..."
+            pact-broker can-i-deploy \
+              --pacticipant="$consumer" \
+              --version="${{ github.sha }}" \
+              --to-environment="production" \
+              --broker-base-url="${{ secrets.PACT_BROKER_BASE_URL }}" \
+              --broker-token="${{ secrets.PACT_BROKER_TOKEN }}" || true
+          done

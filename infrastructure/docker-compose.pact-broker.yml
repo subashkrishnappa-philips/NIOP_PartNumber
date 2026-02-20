@@ -1,0 +1,91 @@
+# ============================================================================
+# NIOP Contract Testing - Pact Broker Docker Compose
+# ============================================================================
+# This sets up a local Pact Broker with PostgreSQL backend for contract storage.
+#
+# Usage:
+#   docker-compose -f docker-compose.pact-broker.yml up -d
+#
+# Access:
+#   Pact Broker UI: http://localhost:9292
+#   Default credentials: pact_user / pact_password
+# ============================================================================
+
+version: "3.8"
+
+services:
+  # ==========================================================================
+  # PostgreSQL Database for Pact Broker
+  # ==========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: niop-pact-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pact_broker
+      POSTGRES_PASSWORD: pact_broker_password
+      POSTGRES_DB: pact_broker
+    volumes:
+      - pact-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U pact_broker" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pact-network
+
+  # ==========================================================================
+  # Pact Broker
+  # ==========================================================================
+  pact-broker:
+    image: pactfoundation/pact-broker:latest
+    container_name: niop-pact-broker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Database configuration
+      PACT_BROKER_DATABASE_URL: "postgres://pact_broker:pact_broker_password@postgres:5432/pact_broker"
+
+      # Broker configuration
+      PACT_BROKER_PORT: "9292"
+      PACT_BROKER_LOG_LEVEL: "INFO"
+
+      # Basic auth (change in production!)
+      PACT_BROKER_BASIC_AUTH_USERNAME: "pact_user"
+      PACT_BROKER_BASIC_AUTH_PASSWORD: "pact_password"
+
+      # Enable public read access for badge URLs
+      PACT_BROKER_ALLOW_PUBLIC_READ: "true"
+
+      # Webhook configuration for CI/CD triggers
+      PACT_BROKER_WEBHOOK_SCHEME_WHITELIST: "http https"
+      PACT_BROKER_WEBHOOK_HOST_WHITELIST: "github.com api.github.com"
+
+      # Base URL for links in the UI
+      PACT_BROKER_BASE_URL: "http://localhost:9292"
+
+      # Check for potential duplicate pacticipant names
+      PACT_BROKER_CHECK_FOR_POTENTIAL_DUPLICATE_PACTICIPANT_NAMES: "true"
+    ports:
+      - "9292:9292"
+    healthcheck:
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:9292/diagnostic/status/heartbeat" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pact-network
+
+volumes:
+  pact-postgres-data:
+    driver: local
+
+networks:
+  pact-network:
+    driver: bridge
+    name: niop-pact-network
