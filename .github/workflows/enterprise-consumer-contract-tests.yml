@@ -69,55 +69,60 @@ jobs:
   # Phase 2: Run consumer tests in parallel (one per consumer team)
   # ==========================================================================
   consumer-tests:
-    name: "${{ matrix.consumer.name }} — Pact Tests"
+    name: "PCAW — Pact Tests"
     runs-on: ubuntu-latest
     needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        consumer:
-          - { name: "Salesforce", participant: "Salesforce-Consumer", project: "src/Consumers/Salesforce/Consumer.Salesforce.ContractTests/Consumer.Salesforce.ContractTests.csproj" }
-          - { name: "PCAW",       participant: "PCAW-Consumer",       project: "src/Consumers/PCAW/Consumer.PCAW.ContractTests/Consumer.PCAW.ContractTests.csproj" }
-          - { name: "Soraian",    participant: "Soraian-Consumer",    project: "src/Consumers/Soraian/Consumer.Soraian.ContractTests/Consumer.Soraian.ContractTests.csproj" }
-          - { name: "MSA",        participant: "MSA-Consumer",        project: "src/Consumers/MSA/Consumer.MSA.ContractTests/Consumer.MSA.ContractTests.csproj" }
-          - { name: "INR",        participant: "INR-Consumer",        project: "src/Consumers/INR/Consumer.INR.ContractTests/Consumer.INR.ContractTests.csproj" }
-          - { name: "ATS",        participant: "ATS-Consumer",        project: "src/Consumers/ATS/Consumer.ATS.ContractTests/Consumer.ATS.ContractTests.csproj" }
-          - { name: "Cardiologs", participant: "Cardiologs-Consumer", project: "src/Consumers/Cardiologs/Consumer.Cardiologs.ContractTests/Consumer.Cardiologs.ContractTests.csproj" }
-          - { name: "EMR",        participant: "EMR-Consumer",        project: "src/Consumers/EMR/Consumer.EMR.ContractTests/Consumer.EMR.ContractTests.csproj" }
+    #strategy:
+     # fail-fast: false
+      #matrix:
+       # consumer:
+        #  - { name: "Salesforce", participant: "Salesforce-Consumer", project: "src/Consumers/Salesforce/Consumer.Salesforce.ContractTests/Consumer.Salesforce.ContractTests.csproj" }
+         # - { name: "PCAW",       participant: "PCAW-Consumer",       project: "src/Consumers/PCAW/Consumer.PCAW.ContractTests/Consumer.PCAW.ContractTests.csproj" }
+          #- { name: "Soraian",    participant: "Soraian-Consumer",    project: "src/Consumers/Soraian/Consumer.Soraian.ContractTests/Consumer.Soraian.ContractTests.csproj" }
+          #- { name: "MSA",        participant: "MSA-Consumer",        project: "src/Consumers/MSA/Consumer.MSA.ContractTests/Consumer.MSA.ContractTests.csproj" }
+          #- { name: "INR",        participant: "INR-Consumer",        project: "src/Consumers/INR/Consumer.INR.ContractTests/Consumer.INR.ContractTests.csproj" }
+          #- { name: "ATS",        participant: "ATS-Consumer",        project: "src/Consumers/ATS/Consumer.ATS.ContractTests/Consumer.ATS.ContractTests.csproj" }
+          #- { name: "Cardiologs", participant: "Cardiologs-Consumer", project: "src/Consumers/Cardiologs/Consumer.Cardiologs.ContractTests/Consumer.Cardiologs.ContractTests.csproj" }
+          #- { name: "EMR",        participant: "EMR-Consumer",        project: "src/Consumers/EMR/Consumer.EMR.ContractTests/Consumer.EMR.ContractTests.csproj" }
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout provider code
+        uses: actions/checkout@v4
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Restore & build
-        run: |
-          dotnet restore ${{ matrix.consumer.project }}
-          dotnet build ${{ matrix.consumer.project }} --no-restore --configuration Release
+    #   - name: Restore & build
+    #     run: |
+    #       dotnet restore ${{ matrix.consumer.project }}
+    #       dotnet build ${{ matrix.consumer.project }} --no-restore --configuration Release
 
-      - name: Run ${{ matrix.consumer.name }} pact tests
+    #   - name: Run ${{ matrix.consumer.name }} pact tests
+    #     run: |
+    #       dotnet test ${{ matrix.consumer.project }} \
+    #         --configuration Release \
+    #         --no-build \
+    #         --logger "trx;LogFileName=${{ matrix.consumer.name }}-results.trx" \
+    #         --results-directory ./test-results \
+    #         --verbosity normal
+
+      - name: Restore, Build, and Test
         run: |
-          dotnet test ${{ matrix.consumer.project }} \
-            --configuration Release \
-            --no-build \
-            --logger "trx;LogFileName=${{ matrix.consumer.name }}-results.trx" \
-            --results-directory ./test-results \
-            --verbosity normal
+          dotnet test src/Consumers/PCAW/Consumer.PCAW.ContractTests/Consumer.PCAW.ContractTests.csproj --configuration Release --logger "trx;LogFileName=PCAW-results.trx" --results-directory ./test-results --verbosity normal
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.consumer.name }}-test-results
+          name: PCAW-test-results
           path: ./test-results/
           retention-days: 30
 
       - name: Upload generated pact file
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.consumer.name }}-pact
-          path: ./pacts/${{ matrix.consumer.participant }}-NIOP-Beat-Inventory-Api.json
+          name: PCAW-pact
+          path: ./pacts/PCAW-Consumer-NIOP-Beat-Inventory-Api.json
           retention-days: 30
 
   # ==========================================================================

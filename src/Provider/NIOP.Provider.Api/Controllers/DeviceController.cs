@@ -38,13 +38,28 @@ public class DeviceController : ControllerBase
     {
         _logger.LogInformation("Received UpdateDeviceInformation request for SerialNumber: {SerialNumber}", request.SerialNumber);
 
-        var response = await _deviceService.UpdateDeviceInformationAsync(request);
-
-        if (!response.Success)
+        try
         {
-            return BadRequest(response);
-        }
+            var response = await _deviceService.UpdateDeviceInformationAsync(request);
 
-        return Ok(response);
+            if (!response.Success)
+            {
+                // Log the validation failure before returning BadRequest
+                _logger.LogWarning("Validation failed for UpdateDeviceInformation: {Message}", response.Message);
+                return BadRequest(response);
+            }
+
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "An unhandled exception occurred in UpdateDeviceInformation for SerialNumber: {SerialNumber}", request.SerialNumber);
+            return StatusCode(StatusCodes.Status500InternalServerError, new UpdateDeviceInformationResponse
+            {
+                Success = false,
+                Message = "An internal server error occurred. Please try again later.",
+                CorrelationId = Guid.NewGuid().ToString()
+            });
+        }
     }
 }

@@ -45,20 +45,24 @@ public class ProviderWebApplicationFactory : WebApplicationFactory<Program>
     {
         if (_kestrelHost != null) return;
 
-        // Setup default mock behavior for successful update
+        // Mock successful response for valid requests (including NewPartNumber)
         MockDeviceService
-            .Setup(s => s.UpdateDeviceInformationAsync(It.IsAny<UpdateDeviceInformationRequest>()))
+            .Setup(s => s.UpdateDeviceInformationAsync(It.Is<UpdateDeviceInformationRequest>(req =>
+                !string.IsNullOrWhiteSpace(req.SerialNumber) &&
+                !string.IsNullOrWhiteSpace(req.NewPartNumber) &&
+                !string.IsNullOrWhiteSpace(req.Username) &&
+                !string.IsNullOrWhiteSpace(req.Org))))
             .ReturnsAsync(new UpdateDeviceInformationResponse
             {
                 Success = true,
                 Message = "Device information updated successfully.",
-                CorrelationId = "test-correlation-id-001"
+                CorrelationId = "test-correlation-id-success-001"
             });
 
-        // Setup mock for invalid serial number (empty)
+        // Mock failure for requests missing SerialNumber
         MockDeviceService
-            .Setup(s => s.UpdateDeviceInformationAsync(
-                It.Is<UpdateDeviceInformationRequest>(r => string.IsNullOrWhiteSpace(r.SerialNumber))))
+            .Setup(s => s.UpdateDeviceInformationAsync(It.Is<UpdateDeviceInformationRequest>(req =>
+                string.IsNullOrWhiteSpace(req.SerialNumber))))
             .ReturnsAsync(new UpdateDeviceInformationResponse
             {
                 Success = false,
@@ -66,37 +70,43 @@ public class ProviderWebApplicationFactory : WebApplicationFactory<Program>
                 CorrelationId = "test-correlation-id-error-001"
             });
 
-        // Setup mock for empty part number
+        // Mock failure for requests missing Username
         MockDeviceService
-            .Setup(s => s.UpdateDeviceInformationAsync(
-                It.Is<UpdateDeviceInformationRequest>(r => string.IsNullOrWhiteSpace(r.NewPartNumber))))
-            .ReturnsAsync(new UpdateDeviceInformationResponse
-            {
-                Success = false,
-                Message = "New part number is required.",
-                CorrelationId = "test-correlation-id-error-002"
-            });
-
-        // Setup mock for empty username
-        MockDeviceService
-            .Setup(s => s.UpdateDeviceInformationAsync(
-                It.Is<UpdateDeviceInformationRequest>(r => string.IsNullOrWhiteSpace(r.Username))))
+            .Setup(s => s.UpdateDeviceInformationAsync(It.Is<UpdateDeviceInformationRequest>(req =>
+                !string.IsNullOrWhiteSpace(req.SerialNumber) &&
+                string.IsNullOrWhiteSpace(req.Username))))
             .ReturnsAsync(new UpdateDeviceInformationResponse
             {
                 Success = false,
                 Message = "Username is required.",
+                CorrelationId = "test-correlation-id-error-002"
+            });
+
+        // Mock failure for requests missing NewPartNumber
+        MockDeviceService
+            .Setup(s => s.UpdateDeviceInformationAsync(It.Is<UpdateDeviceInformationRequest>(req =>
+                !string.IsNullOrWhiteSpace(req.SerialNumber) &&
+                !string.IsNullOrWhiteSpace(req.Username) &&
+                string.IsNullOrWhiteSpace(req.NewPartNumber))))
+            .ReturnsAsync(new UpdateDeviceInformationResponse
+            {
+                Success = false,
+                Message = "New part number is required.",
                 CorrelationId = "test-correlation-id-error-003"
             });
 
-        // Setup mock for empty org
+        // Mock failure for requests missing Org
         MockDeviceService
-            .Setup(s => s.UpdateDeviceInformationAsync(
-                It.Is<UpdateDeviceInformationRequest>(r => string.IsNullOrWhiteSpace(r.Org))))
+            .Setup(s => s.UpdateDeviceInformationAsync(It.Is<UpdateDeviceInformationRequest>(req =>
+                !string.IsNullOrWhiteSpace(req.SerialNumber) &&
+                !string.IsNullOrWhiteSpace(req.Username) &&
+                !string.IsNullOrWhiteSpace(req.NewPartNumber) &&
+                string.IsNullOrWhiteSpace(req.Org))))
             .ReturnsAsync(new UpdateDeviceInformationResponse
             {
                 Success = false,
                 Message = "Org is required.",
-                CorrelationId = "test-correlation-id-error-004"
+                CorrelationId = "test-correlation-id-error-003"
             });
 
         _kestrelHost = Host.CreateDefaultBuilder()

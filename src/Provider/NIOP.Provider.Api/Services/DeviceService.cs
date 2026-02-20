@@ -32,22 +32,22 @@ public class DeviceService : IDeviceService
             };
         }
 
-        if (string.IsNullOrWhiteSpace(request.NewPartNumber))
-        {
-            return new UpdateDeviceInformationResponse
-            {
-                Success = false,
-                Message = "New part number is required.",
-                CorrelationId = Guid.NewGuid().ToString()
-            };
-        }
-
         if (string.IsNullOrWhiteSpace(request.Username))
         {
             return new UpdateDeviceInformationResponse
             {
                 Success = false,
                 Message = "Username is required.",
+                CorrelationId = Guid.NewGuid().ToString()
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(request.NewPartNumber))
+        {
+            return new UpdateDeviceInformationResponse
+            {
+                Success = false,
+                Message = "New part number is required.",
                 CorrelationId = Guid.NewGuid().ToString()
             };
         }

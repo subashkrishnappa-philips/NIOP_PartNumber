@@ -5,6 +5,7 @@ using NIOP.Contracts.Shared.Client;
 using NIOP.Contracts.Shared.Constants;
 using NIOP.Contracts.Shared.Models;
 using PactNet;
+using PactNet.Matchers;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -48,8 +49,8 @@ public class PcawUpdateDeviceTests
             .WithJsonBody(new
             {
                 SerialNumber = "SN-PCAW-2024-100",
-                NewPartNumber = "PN-CARDIAC-MONITOR-V3",
-                Username = "pcaw.workflow.engine"
+                Username = "pcaw.workflow.engine",
+                Org = "philips"
             })
             .WillRespond()
             .WithStatus(HttpStatusCode.OK)
@@ -58,7 +59,7 @@ public class PcawUpdateDeviceTests
             {
                 Success = true,
                 Message = "Device information updated successfully.",
-                CorrelationId = "test-correlation-id-001"
+                CorrelationId = Match.Type("test-correlation-id-001")
             });
 
         await _pactBuilder.VerifyAsync(async ctx =>
@@ -68,8 +69,8 @@ public class PcawUpdateDeviceTests
             var response = await client.UpdateDeviceInformationAsync(new UpdateDeviceInformationRequest
             {
                 SerialNumber = "SN-PCAW-2024-100",
-                NewPartNumber = "PN-CARDIAC-MONITOR-V3",
-                Username = "pcaw.workflow.engine"
+                Username = "pcaw.workflow.engine",
+                Org = "philips"
             });
 
             // Assert
@@ -80,19 +81,19 @@ public class PcawUpdateDeviceTests
         });
     }
 
-    [Fact(DisplayName = "PCAW: Receives error when part number is empty")]
-    public async Task UpdateDeviceInformation_WithEmptyPartNumber_ReturnsBadRequest()
+    [Fact(DisplayName = "PCAW: Receives error when serial number is empty")]
+    public async Task UpdateDeviceInformation_WithEmptySerialNumber_ReturnsBadRequest()
     {
         // Arrange
         _pactBuilder
-            .UponReceiving("a request from PCAW with missing part number")
-            .Given("an update request with empty part number")
+            .UponReceiving("a request from PCAW with missing serial number")
+            .Given("an update request with empty serial number")
             .WithRequest(HttpMethod.Post, PactConstants.Endpoints.UpdateDeviceInformation)
             .WithJsonBody(new
             {
-                SerialNumber = "SN-PCAW-2024-100",
-                NewPartNumber = "",
-                Username = "pcaw.workflow.engine"
+                SerialNumber = "",
+                Username = "pcaw.workflow.engine",
+                Org = "philips"
             })
             .WillRespond()
             .WithStatus(HttpStatusCode.BadRequest)
@@ -100,7 +101,7 @@ public class PcawUpdateDeviceTests
             .WithJsonBody(new
             {
                 Success = false,
-                Message = "New part number is required."
+                Message = "Serial number is required."
             });
 
         await _pactBuilder.VerifyAsync(async ctx =>
@@ -109,9 +110,9 @@ public class PcawUpdateDeviceTests
             var client = new NiopInventoryApiClient(new HttpClient { BaseAddress = ctx.MockServerUri });
             var response = await client.UpdateDeviceInformationAsync(new UpdateDeviceInformationRequest
             {
-                SerialNumber = "SN-PCAW-2024-100",
-                NewPartNumber = "",
-                Username = "pcaw.workflow.engine"
+                SerialNumber = "",
+                Username = "pcaw.workflow.engine",
+                Org = "philips"
             });
 
             // Assert

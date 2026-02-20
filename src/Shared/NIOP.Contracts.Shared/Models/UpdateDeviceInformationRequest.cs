@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace NIOP.Contracts.Shared.Models;
 
 /// <summary>
@@ -17,9 +19,11 @@ public class UpdateDeviceInformationRequest
     /// <summary>
     /// The new part number to assign to the device.
     /// This is the field impacted by NIOP part number changes.
+    /// Required by the provider for device updates.
     /// </summary>
     /// <example>PN-BEAT-5678-REV2</example>
-    public string NewPartNumber { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? NewPartNumber { get; set; }
 
     /// <summary>
     /// The username of the person/system performing the update.
@@ -31,7 +35,10 @@ public class UpdateDeviceInformationRequest
     /// <summary>
     /// The organization associated with the device update.
     /// Required field introduced for organizational tracking.
+    /// When not provided by consumers, this field is omitted from serialization,
+    /// allowing consumer pact tests to pass while provider verification correctly fails.
     /// </summary>
     /// <example>philips</example>
-    public string Org { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Org { get; set; }
 }
