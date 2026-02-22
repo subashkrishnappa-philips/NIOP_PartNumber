@@ -1,5 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
-using NIOP.Contracts.Shared.Models;
+using NIOP.Provider.Api.Models;
 using NIOP.Provider.Api.Services;
 
 namespace NIOP.Provider.Api.Controllers;

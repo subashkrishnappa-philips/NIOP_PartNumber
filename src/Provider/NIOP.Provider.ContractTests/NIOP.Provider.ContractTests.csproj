@@ -24,7 +24,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NIOP.Provider.Api\NIOP.Provider.Api.csproj" />
-    <ProjectReference Include="..\..\Shared\NIOP.Contracts.Shared\NIOP.Contracts.Shared.csproj" />
   </ItemGroup>
 
 </Project>

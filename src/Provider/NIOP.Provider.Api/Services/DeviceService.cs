@@ -1,6 +1,6 @@
 namespace NIOP.Provider.Api.Services;
 
-using NIOP.Contracts.Shared.Models;
+using NIOP.Provider.Api.Models;
 
 /// <summary>
 /// Implementation of device service for NIOP inventory operations.

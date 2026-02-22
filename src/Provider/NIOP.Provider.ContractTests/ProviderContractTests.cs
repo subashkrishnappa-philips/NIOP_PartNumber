@@ -1,4 +1,4 @@
-using NIOP.Contracts.Shared.Constants;
+using NIOP.Provider.ContractTests.Constants;
 using PactNet;
 using PactNet.Verifier;
 using Xunit;
