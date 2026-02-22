@@ -3,7 +3,15 @@
 # ============================================================================
 #
 # This pipeline lives in the PROVIDER repository (NIOP_PartNumberEndpoints).
-# It is completely independent from the consumer repository.
+# It verifies the provider against consumer-generated pact files fetched from
+# the Pact Broker. Consumers (e.g. PCAW) publish their pacts to the broker;
+# this pipeline pulls those pacts and replays every interaction against the
+# provider to ensure compatibility.
+#
+# IMPORTANT: Pact Broker credentials MUST be configured as repository secrets:
+#   - PACT_BROKER_BASE_URL  (required)
+#   - PACT_BROKER_TOKEN     (recommended, for PactFlow/SaaS)
+#   - or PACT_BROKER_USERNAME / PACT_BROKER_PASSWORD (for self-hosted)
 #
 # Triggered by:
 #   1. Push/PR to provider code     -> verify latest consumer pacts from broker
@@ -12,11 +20,12 @@
 #
 # Flow:
 #   1. Build the provider API
-#   2. Fetch ALL consumer pacts from the Pact Broker
-#   3. Spin up the provider, replay each consumer's pact interactions
-#   4. Publish verification results BACK to the Pact Broker
-#   5. can-i-deploy check
-#   6. Record deployment (on main branch merge)
+#   2. Validate Pact Broker credentials are present
+#   3. Fetch ALL consumer-generated pacts from the Pact Broker
+#   4. Spin up the provider, replay each consumer's pact interactions
+#   5. Publish verification results BACK to the Pact Broker
+#   6. can-i-deploy check
+#   7. Record deployment (on main branch merge)
 # ============================================================================
 
 name: "Provider: Contract Verification"
@@ -47,10 +56,10 @@ env:
 
 jobs:
   # ==========================================================================
-  # Phase 1: Provider Verification against Pact Broker
+  # Phase 1: Verify Provider against consumer-generated pacts from Pact Broker
   # ==========================================================================
   verify-provider:
-    name: "Verify Provider Against Pact Broker"
+    name: "Verify Provider Against Consumer Pacts (Broker)"
     runs-on: ubuntu-latest
     outputs:
       verification-result: ${{ steps.run-tests.outcome }}
@@ -70,29 +79,49 @@ jobs:
       - name: Build provider + tests
         run: dotnet build src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj --no-restore --configuration Release
 
-      - name: Determine broker auth method
+      - name: Validate Pact Broker credentials
         id: broker-auth
         run: |
           if [ -n "${{ secrets.PACT_BROKER_TOKEN }}" ]; then
             echo "method=token" >> $GITHUB_OUTPUT
+            echo "Using token-based Pact Broker authentication"
           elif [ -n "${{ secrets.PACT_BROKER_USERNAME }}" ]; then
             echo "method=basic" >> $GITHUB_OUTPUT
+            echo "Using basic auth Pact Broker authentication"
           else
-            echo "method=local" >> $GITHUB_OUTPUT
-            echo "::warning::No Pact Broker credentials configured. Falling back to local pact files."
+            echo "::error::Pact Broker credentials are required in CI. Set PACT_BROKER_TOKEN (recommended) or PACT_BROKER_USERNAME/PACT_BROKER_PASSWORD secrets."
+            echo "::error::Consumer-generated pact files must be fetched from the Pact Broker. See docs/PACT_BROKER_GUIDE.md."
+            exit 1
           fi
 
-      - name: "Run provider verification tests"
+          if [ -z "${{ secrets.PACT_BROKER_BASE_URL }}" ]; then
+            echo "::error::PACT_BROKER_BASE_URL secret is required. Set it to the URL of your Pact Broker instance."
+            exit 1
+          fi
+          echo "Pact Broker URL configured — will fetch consumer-generated pacts from broker"
+
+      # ----------------------------------------------------------------
+      # Verify consumer-generated pacts fetched from the Pact Broker.
+      # The consumer project publishes its pact files to the broker;
+      # this step pulls them and replays every interaction against the
+      # running provider to ensure compatibility.
+      # ----------------------------------------------------------------
+      - name: "Verify consumer pacts from Pact Broker"
         id: run-tests
         env:
+          # Pact Broker connection — consumer pacts are fetched from here
           PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
           PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
           PACT_BROKER_USERNAME: ${{ secrets.PACT_BROKER_USERNAME }}
           PACT_BROKER_PASSWORD: ${{ secrets.PACT_BROKER_PASSWORD }}
+          # Provider identification for result publication
           PROVIDER_VERSION: ${{ github.sha }}
           GIT_BRANCH: ${{ github.ref_name }}
           PACT_URL: ${{ github.event.inputs.pact_url || github.event.client_payload.pact_url || '' }}
+          # Ensure CI mode — prevents fallback to local pact files
+          CI: true
         run: |
+          echo "Fetching consumer-generated pact files from Pact Broker and verifying against provider..."
           dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj \
             --configuration Release \
             --no-build \

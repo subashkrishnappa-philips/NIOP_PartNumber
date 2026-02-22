@@ -101,7 +101,21 @@ public class ProviderContractTests : IClassFixture<Fixtures.ProviderWebApplicati
         }
         else
         {
-            // Fallback: verify from local pact files (useful for local development)
+            // In CI, pacts MUST come from the broker (consumer-generated).
+            // Local pact files are only used for local development convenience.
+            var isCI = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI"));
+            if (isCI)
+            {
+                Assert.Fail(
+                    "Pact Broker credentials are required in CI. " +
+                    "Consumer-generated pact files must be fetched from the Pact Broker. " +
+                    "Set PACT_BROKER_BASE_URL and PACT_BROKER_TOKEN (or USERNAME/PASSWORD) environment variables.");
+            }
+
+            // Local development fallback: verify from local pact files
+            _output.WriteLine("WARNING: No Pact Broker configured. Using local pact files for development only.");
+            _output.WriteLine("In CI/CD, pacts should always be fetched from the Pact Broker (consumer-generated).");
+
             var pactDir = PactConstants.PactOutput.GetPactDirectory();
             var pactFiles = Directory.Exists(pactDir)
                 ? Directory.GetFiles(pactDir, "*.json")
@@ -120,9 +134,11 @@ public class ProviderContractTests : IClassFixture<Fixtures.ProviderWebApplicati
     }
 
     /// <summary>
-    /// Verifies pacts for a specific consumer (useful for targeted testing).
+    /// Verifies pacts for a specific consumer.
+    /// In CI, fetches the consumer's pact from the Pact Broker.
+    /// Locally, falls back to pact files on disk.
     /// </summary>
-    [Theory(DisplayName = "Provider verifies individual consumer pacts from local files")]
+    [Theory(DisplayName = "Provider verifies individual consumer pact")]
     [InlineData(PactConstants.Consumers.PCAW)]
     public void EnsureProviderHonoursSpecificConsumerPact(string consumerName)
     {
@@ -130,18 +146,83 @@ public class ProviderContractTests : IClassFixture<Fixtures.ProviderWebApplicati
         _factory.EnsureStarted();
         var providerUri = _factory.ServerUri;
 
-        var pactDir = PactConstants.PactOutput.GetPactDirectory();
-        var pactFile = Path.Combine(pactDir, $"{consumerName}-{PactConstants.ProviderName}.json");
+        var brokerUrl = Environment.GetEnvironmentVariable(PactConstants.Broker.UrlEnvironmentVariable)
+                        ?? PactConstants.Broker.DefaultUrl;
+        var brokerToken = Environment.GetEnvironmentVariable(PactConstants.Broker.TokenEnvironmentVariable);
+        var brokerUsername = Environment.GetEnvironmentVariable(PactConstants.Broker.UsernameEnvironmentVariable);
+        var brokerPassword = Environment.GetEnvironmentVariable(PactConstants.Broker.PasswordEnvironmentVariable);
 
-        Assert.True(File.Exists(pactFile),
-            $"Pact file not found for consumer '{consumerName}': {pactFile}. " +
-            "Run the consumer pact tests first to generate pact files.");
-
-        // Act & Assert
         using var verifier = new PactVerifier(PactConstants.ProviderName);
-        verifier
-            .WithHttpEndpoint(providerUri)
-            .WithFileSource(new FileInfo(pactFile))
-            .Verify();
+
+        if (!string.IsNullOrEmpty(brokerToken))
+        {
+            // Token auth — fetch this consumer's pact from broker
+            _output.WriteLine($"Verifying pact for consumer '{consumerName}' from Pact Broker (token auth)");
+            verifier
+                .WithHttpEndpoint(providerUri)
+                .WithPactBrokerSource(new Uri(brokerUrl), options =>
+                {
+                    options.TokenAuthentication(brokerToken);
+                    options.PublishResults(
+                        Environment.GetEnvironmentVariable("PROVIDER_VERSION") ?? "1.0.0",
+                        results =>
+                        {
+                            var branch = Environment.GetEnvironmentVariable("GIT_BRANCH") ?? "main";
+                            results.ProviderBranch(branch);
+                        });
+                    options.ConsumerVersionSelectors(
+                        new ConsumerVersionSelector { Consumer = consumerName, Latest = true }
+                    );
+                })
+                .Verify();
+        }
+        else if (!string.IsNullOrEmpty(brokerUsername) && !string.IsNullOrEmpty(brokerPassword))
+        {
+            // Basic auth — fetch this consumer's pact from broker
+            _output.WriteLine($"Verifying pact for consumer '{consumerName}' from Pact Broker (basic auth)");
+            verifier
+                .WithHttpEndpoint(providerUri)
+                .WithPactBrokerSource(new Uri(brokerUrl), options =>
+                {
+                    options.BasicAuthentication(brokerUsername, brokerPassword);
+                    options.PublishResults(
+                        Environment.GetEnvironmentVariable("PROVIDER_VERSION") ?? "1.0.0",
+                        results =>
+                        {
+                            var branch = Environment.GetEnvironmentVariable("GIT_BRANCH") ?? "main";
+                            results.ProviderBranch(branch);
+                        });
+                    options.ConsumerVersionSelectors(
+                        new ConsumerVersionSelector { Consumer = consumerName, Latest = true }
+                    );
+                })
+                .Verify();
+        }
+        else
+        {
+            // No broker credentials — CI must fail, local dev can use files
+            var isCI = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI"));
+            if (isCI)
+            {
+                Assert.Fail(
+                    $"Pact Broker credentials are required in CI to verify consumer '{consumerName}'. " +
+                    "Consumer-generated pacts must be fetched from the Pact Broker. " +
+                    "Set PACT_BROKER_BASE_URL and PACT_BROKER_TOKEN (or USERNAME/PASSWORD).");
+            }
+
+            // Local development fallback
+            var pactDir = PactConstants.PactOutput.GetPactDirectory();
+            var pactFile = Path.Combine(pactDir, $"{consumerName}-{PactConstants.ProviderName}.json");
+
+            Assert.True(File.Exists(pactFile),
+                $"Pact file not found for consumer '{consumerName}': {pactFile}. " +
+                "Run the consumer pact tests first to generate pact files, or set PACT_BROKER_* environment variables.");
+
+            _output.WriteLine($"Verifying local pact file for consumer '{consumerName}': {pactFile}");
+            verifier
+                .WithHttpEndpoint(providerUri)
+                .WithFileSource(new FileInfo(pactFile))
+                .Verify();
+        }
     }
 }
