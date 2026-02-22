@@ -4,8 +4,8 @@ namespace NIOP.Provider.Api.Models;
 
 /// <summary>
 /// Request model for UpdateDeviceInformation API endpoint.
-/// Used by consuming systems (Salesforce, PCAW, Soraian, MSA, INR, ATS, Cardiologs, EMR)
-/// to update device information with new part numbers in the NIOP inventory system.
+/// Used by consuming systems to update device information
+/// with new part numbers in the NIOP inventory system.
 /// </summary>
 public class UpdateDeviceInformationRequest
 {

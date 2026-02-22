@@ -32,9 +32,8 @@ As the API provider, you must:
 │ 2. Fetch pacts from      │
 │    Pact Broker           │
 │ 3. For each consumer:    │
-│    a. Set provider state │
-│    b. Replay request     │
-│    c. Compare response   │
+│    a. Replay request     │
+│    b. Compare response   │
 │ 4. Report results to     │
 │    Pact Broker           │
 └──────────────────────────┘
@@ -43,57 +42,70 @@ As the API provider, you must:
 ### Running Verification Locally
 
 ```bash
-# Against local pact files (after running consumer tests)
-dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj
+# Against local pact files (in pacts/ directory)
+dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj --configuration Release
 
 # Against Pact Broker
 $env:PACT_BROKER_BASE_URL = "http://localhost:9292"
+$env:PACT_BROKER_USERNAME = "pact_user"
+$env:PACT_BROKER_PASSWORD = "pact_password"
 $env:PROVIDER_VERSION = "local-dev"
-dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj
+dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj --configuration Release
+
+# Only broker-based tests (same as CI pipeline)
+dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj --filter "DisplayName~Pact Broker"
 ```
+
+---
+
+## Key Source Files
+
+| File | Purpose |
+|------|---------|
+| `ProviderContractTests.cs` | Pact verification test methods (broker + local file) |
+| `ProviderWebApplicationFactory.cs` | Real Kestrel host with mocked `IDeviceService` |
+| `PactConstants.cs` | Provider/consumer names, broker config, pact directory resolution |
+| `DeviceController.cs` | The API endpoint under contract |
+| `DeviceService.cs` | Business logic with validation rules |
+| `UpdateDeviceInformationRequest.cs` | Request model (SerialNumber, NewPartNumber, Username, Org) |
+| `UpdateDeviceInformationResponse.cs` | Response model (Success, Message, CorrelationId) |
 
 ---
 
 ## Managing Provider States
 
-Provider states set up preconditions for consumer interactions.
-
 ### What Are Provider States?
 
-When a consumer says:
+When a consumer pact says:
 ```
-Given "a device with serial number SN-SF-2024-001 exists"
+Given "a device with serial number SN-PCAW-2024-100 exists in inventory"
 ```
 
-Your provider test must ensure that state is true before running the interaction.
+Your provider mock must ensure that state is handled before running the interaction.
 
 ### Current Implementation
 
-In `ProviderWebApplicationFactory.cs`, the mock `DeviceService` is set up to handle all provider states:
+In `ProviderWebApplicationFactory.cs`, the mock `IDeviceService` is configured with ordered `Setup` calls:
 
 ```csharp
-// Default: successful update
-MockDeviceService
-    .Setup(s => s.UpdateDeviceInformationAsync(It.IsAny<UpdateDeviceInformationRequest>()))
+// Success: all required fields present (SerialNumber, NewPartNumber, Username, Org)
+MockDeviceService.Setup(s => s.UpdateDeviceInformationAsync(
+    It.Is<UpdateDeviceInformationRequest>(req =>
+        !string.IsNullOrWhiteSpace(req.SerialNumber) &&
+        !string.IsNullOrWhiteSpace(req.NewPartNumber) &&
+        !string.IsNullOrWhiteSpace(req.Username) &&
+        !string.IsNullOrWhiteSpace(req.Org))))
     .ReturnsAsync(new UpdateDeviceInformationResponse { Success = true, ... });
 
-// State: empty serial number → error
-MockDeviceService
-    .Setup(s => s.UpdateDeviceInformationAsync(
-        It.Is<UpdateDeviceInformationRequest>(r => string.IsNullOrWhiteSpace(r.SerialNumber))))
+// Error: missing SerialNumber
+MockDeviceService.Setup(s => s.UpdateDeviceInformationAsync(
+    It.Is<UpdateDeviceInformationRequest>(req =>
+        string.IsNullOrWhiteSpace(req.SerialNumber))))
     .ReturnsAsync(new UpdateDeviceInformationResponse { Success = false, ... });
-```
 
-### Adding New Provider States
-
-When consumers define new states, update the factory:
-
-```csharp
-// New state: "a device with serial number X does not exist"
-MockDeviceService
-    .Setup(s => s.UpdateDeviceInformationAsync(
-        It.Is<UpdateDeviceInformationRequest>(r => r.SerialNumber == "NON-EXISTENT")))
-    .ThrowsAsync(new KeyNotFoundException("Device not found"));
+// Error: missing Username
+// Error: missing NewPartNumber
+// Error: missing Org
 ```
 
 ---
@@ -102,7 +114,6 @@ MockDeviceService
 
 ### Non-Breaking Changes (Safe)
 
-These changes won't break consumers:
 - Adding **optional** fields to the response
 - Adding **optional** fields to the request
 - Adding new endpoints
@@ -110,10 +121,9 @@ These changes won't break consumers:
 
 ### Breaking Changes (Dangerous)
 
-These WILL break consumers — coordinate first:
-- Removing or renaming response fields
-- Adding **required** fields to the request
-- Changing field types (string → int)
+- Removing or renaming response fields consumers depend on
+- Adding **required** fields to the request that consumers don't send
+- Changing field types (e.g., `string` → `int`)
 - Changing HTTP status codes
 - Changing the endpoint path
 
@@ -121,23 +131,23 @@ These WILL break consumers — coordinate first:
 
 1. Make your change locally
 2. Run provider verification: `dotnet test` (provider tests)
-3. If all pass → safe to merge
-4. If any fail → coordinate with affected consumers
+3. If all consumer pacts pass → safe to merge
+4. If any fail → coordinate with the affected consumer team
 
 ### Breaking Change Process
 
-1. Announce the change to all consumer teams
+1. Announce the intended change to consumer teams
 2. Agree on a migration timeline
-3. Consider versioning (`/api/v2/UpdateDeviceInformation`)
-4. Consumer teams update their pacts
-5. Verify all updated pacts pass
-6. Deploy together or use feature flags
+3. Consumer teams update their contracts to include the new expectation
+4. Consumer publishes updated pact to broker
+5. Provider re-verifies → all pass
+6. Deploy
 
 ---
 
 ## Using Can-I-Deploy
 
-Before deploying to any environment, always check:
+Before deploying, always check:
 
 ```bash
 pact-broker can-i-deploy \
@@ -147,51 +157,40 @@ pact-broker can-i-deploy \
   --broker-base-url="http://localhost:9292"
 ```
 
-If it returns ❌, **DO NOT DEPLOY** — a consumer contract is not satisfied.
-
----
-
-## Monitoring the Pact Broker
-
-### Key Pages to Watch
-
-| Page | URL | Purpose |
-|------|-----|---------|
-| Dashboard | http://localhost:9292 | Overview of all pacts |
-| Network Diagram | http://localhost:9292/groups | Visual dependency map |
-| Matrix | http://localhost:9292/matrix | Compatibility matrix |
-
-### Webhook Notifications
-
-The Pact Broker webhook triggers your provider verification workflow whenever a consumer publishes a new pact. This means you'll know immediately if a consumer changes their expectations.
+If it returns **no**, do not deploy — a consumer contract is not satisfied.
 
 ---
 
 ## CI/CD Integration
 
-The provider verification runs automatically via GitHub Actions:
+The provider verification runs automatically via GitHub Actions (`provider-contract-verification.yml`):
 
 1. **On push** to main/develop (provider code changes)
 2. **On webhook** from Pact Broker (consumer pact changes)
 3. **On manual trigger** (on-demand verification)
 
-Results are:
-- Published to the Pact Broker
-- Available as GitHub Actions artifacts
-- Visible in the GitHub Actions run summary
+Pipeline jobs:
+- **verify-provider** → runs contract tests against broker
+- **can-i-deploy** → checks Pact Broker compatibility matrix
+- **deploy-provider** → builds and deploys (main only)
+- **record-deployment** → records the deployment in the broker
+- **notify-failure** → generates failure summary on error
 
 ---
 
 ## FAQ
 
-**Q: What if a consumer's test seems wrong?**  
-A: Contact the consumer team. The contract should reflect their actual usage. If they assert on fields they don't use, that's a consumer-side issue.
+**Q: What if a consumer's contract seems wrong?**  
+A: Contact the consumer team. The contract should reflect their actual API usage.
 
 **Q: Can I add fields to the response without breaking consumers?**  
-A: Yes, adding new optional fields is always safe. Consumers only assert on fields they define in their pacts.
+A: Yes. Adding new fields is always safe — consumers only assert on fields they define in their pacts.
 
 **Q: What if I need to urgently deploy a fix?**  
-A: You can still deploy if `can-i-deploy` passes. If it doesn't, assess the risk: the broken contract might be for a non-critical consumer or an edge case.
+A: You can still deploy if `can-i-deploy` passes. If it doesn't, assess the risk: the broken contract might be for a non-critical interaction.
 
 **Q: How do I see which consumers are affected by a change?**  
-A: Run provider verification and check which consumer tests fail. The Pact Broker matrix also shows this clearly.
+A: Run provider verification and check which consumer pacts fail. The Pact Broker matrix also shows this.
+
+**Q: Where do consumer tests live?**  
+A: Consumer tests live in their own repositories. They publish pact files to the Pact Broker, which this repository verifies against.

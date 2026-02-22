@@ -16,7 +16,7 @@ namespace NIOP.Provider.ContractTests;
 /// When any consumer publishes a new pact, these tests will detect breaking changes.
 /// 
 /// Consuming systems verified:
-/// - Salesforce, PCAW, Soraian, MSA, INR, ATS, Cardiologs, EMR
+/// - PCAW
 /// </summary>
 public class ProviderContractTests : IClassFixture<Fixtures.ProviderWebApplicationFactory>
 {
@@ -123,14 +123,7 @@ public class ProviderContractTests : IClassFixture<Fixtures.ProviderWebApplicati
     /// Verifies pacts for a specific consumer (useful for targeted testing).
     /// </summary>
     [Theory(DisplayName = "Provider verifies individual consumer pacts from local files")]
-    // [InlineData(PactConstants.Consumers.Salesforce)]
     [InlineData(PactConstants.Consumers.PCAW)]
-    // [InlineData(PactConstants.Consumers.Soraian)]
-    // [InlineData(PactConstants.Consumers.MSA)]
-    // [InlineData(PactConstants.Consumers.INR)]
-    // [InlineData(PactConstants.Consumers.ATS)]
-    // [InlineData(PactConstants.Consumers.Cardiologs)]
-    // [InlineData(PactConstants.Consumers.EMR)]
     public void EnsureProviderHonoursSpecificConsumerPact(string consumerName)
     {
         // Arrange - Start the real Kestrel-hosted provider

@@ -23,7 +23,7 @@ public class DeviceController : ControllerBase
 
     /// <summary>
     /// Updates device information with a new part number.
-    /// This endpoint is consumed by: Salesforce, PCAW, Soraian, MSA, INR, ATS, Cardiologs, EMR.
+    /// This endpoint is consumed by multiple systems (e.g., PCAW).
     /// It is directly impacted by NIOP part number changes.
     /// </summary>
     /// <param name="request">The update device information request.</param>
