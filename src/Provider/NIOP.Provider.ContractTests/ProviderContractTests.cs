@@ -16,7 +16,7 @@ namespace NIOP.Provider.ContractTests;
 /// When any consumer publishes a new pact, these tests will detect breaking changes.
 /// 
 /// Consuming systems verified:
-/// - Salesforce, PCAW, Soraian, MSA, INR, ATS, Cardiologs, EMR
+/// - PCAW
 /// </summary>
 public class ProviderContractTests : IClassFixture<Fixtures.ProviderWebApplicationFactory>
 {
@@ -101,7 +101,21 @@ public class ProviderContractTests : IClassFixture<Fixtures.ProviderWebApplicati
         }
         else
         {
-            // Fallback: verify from local pact files (useful for local development)
+            // In CI, pacts MUST come from the broker (consumer-generated).
+            // Local pact files are only used for local development convenience.
+            var isCI = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI"));
+            if (isCI)
+            {
+                Assert.Fail(
+                    "Pact Broker credentials are required in CI. " +
+                    "Consumer-generated pact files must be fetched from the Pact Broker. " +
+                    "Set PACT_BROKER_BASE_URL and PACT_BROKER_TOKEN (or USERNAME/PASSWORD) environment variables.");
+            }
+
+            // Local development fallback: verify from local pact files
+            _output.WriteLine("WARNING: No Pact Broker configured. Using local pact files for development only.");
+            _output.WriteLine("In CI/CD, pacts should always be fetched from the Pact Broker (consumer-generated).");
+
             var pactDir = PactConstants.PactOutput.GetPactDirectory();
             var pactFiles = Directory.Exists(pactDir)
                 ? Directory.GetFiles(pactDir, "*.json")
@@ -123,14 +137,7 @@ public class ProviderContractTests : IClassFixture<Fixtures.ProviderWebApplicati
     /// Verifies pacts for a specific consumer (useful for targeted testing).
     /// </summary>
     [Theory(DisplayName = "Provider verifies individual consumer pacts from local files")]
-    // [InlineData(PactConstants.Consumers.Salesforce)]
     [InlineData(PactConstants.Consumers.PCAW)]
-    // [InlineData(PactConstants.Consumers.Soraian)]
-    // [InlineData(PactConstants.Consumers.MSA)]
-    // [InlineData(PactConstants.Consumers.INR)]
-    // [InlineData(PactConstants.Consumers.ATS)]
-    // [InlineData(PactConstants.Consumers.Cardiologs)]
-    // [InlineData(PactConstants.Consumers.EMR)]
     public void EnsureProviderHonoursSpecificConsumerPact(string consumerName)
     {
         // Arrange - Start the real Kestrel-hosted provider
