@@ -16,7 +16,6 @@ public static class PactConstants
     /// </summary>
     public static class Consumers
     {
-        public const string Salesforce = "Salesforce-Consumer";
         public const string PCAW = "PCAW-Consumer";
     }
 
