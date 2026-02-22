@@ -1,4 +1,4 @@
-namespace NIOP.Contracts.Shared.Models;
+namespace NIOP.Provider.Api.Models;
 
 /// <summary>
 /// Response model for UpdateDeviceInformation API endpoint.
@@ -13,7 +13,6 @@ public class UpdateDeviceInformationResponse
 
     /// <summary>
     /// Optional message providing additional context about the operation result.
-    /// Populated when Success is false to describe the failure reason.
     /// </summary>
     public string? Message { get; set; }
 

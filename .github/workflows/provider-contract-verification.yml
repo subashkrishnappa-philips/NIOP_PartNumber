@@ -1,62 +1,44 @@
 # ============================================================================
-# ENTERPRISE: Provider Contract Verification Pipeline
+# Provider Contract Verification Pipeline
 # ============================================================================
 #
-# This is the PROVIDER team's pipeline (NIOP Beat Inventory API).
-# In a real enterprise, this lives in the provider's own repository.
+# This pipeline lives in the PROVIDER repository (NIOP_PartNumberEndpoints).
+# It is completely independent from the consumer repository.
 #
-# It is triggered in 3 ways:
-#   1. Push/PR to provider code     → verify latest consumer pacts from broker
-#   2. Pact Broker WEBHOOK          → a consumer published a new/changed pact
-#   3. Manual dispatch               → on-demand verification
+# Triggered by:
+#   1. Push/PR to provider code     -> verify latest consumer pacts from broker
+#   2. Pact Broker WEBHOOK          -> a consumer published a new/changed pact
+#   3. Manual dispatch              -> on-demand verification
 #
 # Flow:
 #   1. Build the provider API
-#   2. Fetch ALL consumer pacts from the PERSISTENT Pact Broker
+#   2. Fetch ALL consumer pacts from the Pact Broker
 #   3. Spin up the provider, replay each consumer's pact interactions
 #   4. Publish verification results BACK to the Pact Broker
-#   5. can-i-deploy check → is it safe to deploy the provider?
+#   5. can-i-deploy check
 #   6. Record deployment (on main branch merge)
-#
-# WHERE ARE PACTS STORED?
-#   → In the Pact Broker's PostgreSQL database (persistent, shared).
-#   → The provider NEVER has local pact files in production.
-#   → The provider FETCHES pacts from the broker via HTTP.
-#
-# GitHub Secrets required:
-#   - PACT_BROKER_BASE_URL   (e.g. https://pact-broker.mycompany.com)
-#   - PACT_BROKER_USERNAME   (basic auth)
-#   - PACT_BROKER_PASSWORD   (basic auth)
-#   — OR —
-#   - PACT_BROKER_TOKEN      (bearer token for PactFlow SaaS)
 # ============================================================================
 
-name: "Enterprise: Provider Contract Verification"
+name: "Provider: Contract Verification"
 
 on:
   push:
     branches: [main, develop]
     paths:
       - 'src/Provider/**'
-      - 'src/Shared/**'
-      - '.github/workflows/enterprise-provider-contract-verification.yml'
+      - '.github/workflows/provider-contract-verification.yml'
   pull_request:
     branches: [main, develop]
     paths:
       - 'src/Provider/**'
-      - 'src/Shared/**'
 
-  # -------------------------------------------------------------------------
-  # WEBHOOK TRIGGER: Pact Broker fires this when a consumer publishes a
-  # new or changed pact. This is the enterprise-standard integration point.
-  # -------------------------------------------------------------------------
   repository_dispatch:
     types: [pact-changed]
 
   workflow_dispatch:
     inputs:
       pact_url:
-        description: 'Specific pact URL to verify (optional — verifies all if empty)'
+        description: 'Specific pact URL to verify (optional)'
         required: false
         type: string
 
@@ -100,22 +82,6 @@ jobs:
             echo "::warning::No Pact Broker credentials configured. Falling back to local pact files."
           fi
 
-      # =====================================================================
-      # RUN PROVIDER VERIFICATION
-      # =====================================================================
-      # The provider test (ProviderContractTests.cs) does the following:
-      #   1. Starts a real Kestrel HTTP server with mocked services
-      #   2. Connects to the Pact Broker (via env vars)
-      #   3. Fetches ALL consumer pacts (using ConsumerVersionSelectors)
-      #   4. Replays each interaction against the running provider
-      #   5. Publishes pass/fail results back to the Pact Broker
-      #
-      # Environment variables tell the test HOW to connect:
-      #   - PACT_BROKER_BASE_URL → broker address
-      #   - PACT_BROKER_TOKEN or USERNAME/PASSWORD → auth
-      #   - PROVIDER_VERSION → git SHA (for result tracking)
-      #   - GIT_BRANCH → branch name (for consumer version selectors)
-      # =====================================================================
       - name: "Run provider verification tests"
         id: run-tests
         env:
@@ -127,28 +93,9 @@ jobs:
           GIT_BRANCH: ${{ github.ref_name }}
           PACT_URL: ${{ github.event.inputs.pact_url || github.event.client_payload.pact_url || '' }}
         run: |
-          echo "============================================="
-          echo "  Provider Contract Verification"
-          echo "============================================="
-          echo "Provider:          NIOP-Beat-Inventory-Api"
-          echo "Version:           ${{ github.sha }}"
-          echo "Branch:            ${{ github.ref_name }}"
-          echo "Broker:            ${{ secrets.PACT_BROKER_BASE_URL }}"
-          echo "Auth:              ${{ steps.broker-auth.outputs.method }}"
-          echo "Trigger:           ${{ github.event_name }}"
-          echo ""
-          echo "The provider will:"
-          echo "  1. Fetch consumer pacts from the Pact Broker"
-          echo "  2. Start a real HTTP server"
-          echo "  3. Replay each consumer interaction"
-          echo "  4. Publish verification results back to the broker"
-          echo "============================================="
-          echo ""
-
           dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj \
             --configuration Release \
             --no-build \
-            --filter "DisplayName~Pact Broker" \
             --logger "trx;LogFileName=provider-verification-results.trx" \
             --results-directory ./test-results \
             --verbosity normal
@@ -184,7 +131,7 @@ jobs:
             echo "target=staging" >> $GITHUB_OUTPUT
           fi
 
-      - name: "Can NIOP-Beat-Inventory-Api deploy to ${{ steps.env.outputs.target }}?"
+      - name: "Can NIOP-Beat-Inventory-Api deploy?"
         run: |
           BROKER_URL="${{ secrets.PACT_BROKER_BASE_URL }}"
           AUTH_FLAGS=""
@@ -194,7 +141,6 @@ jobs:
             AUTH_FLAGS="--broker-username=${{ secrets.PACT_BROKER_USERNAME }} --broker-password=${{ secrets.PACT_BROKER_PASSWORD }}"
           fi
 
-          echo "Checking if NIOP-Beat-Inventory-Api @ ${{ github.sha }} can deploy to ${{ steps.env.outputs.target }}..."
           pact-broker can-i-deploy \
             --pacticipant="NIOP-Beat-Inventory-Api" \
             --version="${{ github.sha }}" \
@@ -205,7 +151,7 @@ jobs:
             --retry-interval=10
 
   # ==========================================================================
-  # Phase 3: Deploy Provider (only when can-i-deploy succeeds)
+  # Phase 3: Deploy Provider
   # ==========================================================================
   deploy-provider:
     name: "Deploy Provider"
@@ -229,17 +175,7 @@ jobs:
 
       - name: Deploy to production
         run: |
-          echo "============================================="
-          echo "  Deploying NIOP-Beat-Inventory-Api"
-          echo "============================================="
-          echo "Version:     ${{ github.sha }}"
-          echo "Environment: production"
-          echo ""
-          echo "TODO: Replace this step with your actual deployment"
-          echo "  e.g. Azure App Service, Kubernetes, AWS ECS, etc."
-          echo "============================================="
-          # Example:
-          # az webapp deploy --resource-group myRG --name niop-api --src-path ./publish
+          echo "Deploying NIOP-Beat-Inventory-Api version ${{ github.sha }} to production"
 
   # ==========================================================================
   # Phase 4: Record deployment in Pact Broker
@@ -265,7 +201,6 @@ jobs:
             AUTH_FLAGS="--broker-username=${{ secrets.PACT_BROKER_USERNAME }} --broker-password=${{ secrets.PACT_BROKER_PASSWORD }}"
           fi
 
-          echo "Recording deployment: NIOP-Beat-Inventory-Api → production"
           pact-broker record-deployment \
             --pacticipant="NIOP-Beat-Inventory-Api" \
             --version="${{ github.sha }}" \
@@ -289,11 +224,3 @@ jobs:
           echo "**Provider:** NIOP-Beat-Inventory-Api" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Trigger:** \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The provider API failed to satisfy one or more consumer contracts " >> $GITHUB_STEP_SUMMARY
-          echo "fetched from the Pact Broker." >> $GITHUB_STEP_SUMMARY
-          echo "1. Check the [Pact Broker](${{ secrets.PACT_BROKER_BASE_URL }}) for the specific failing interactions" >> $GITHUB_STEP_SUMMARY
-          echo "2. Review the provider verification test results (Artifacts tab)" >> $GITHUB_STEP_SUMMARY
-          echo "3. Coordinate with affected consumer teams before merging" >> $GITHUB_STEP_SUMMARY
-          echo "4. Either revert the provider change or update consumer contracts" >> $GITHUB_STEP_SUMMARY

@@ -1,8 +1,7 @@
-namespace NIOP.Contracts.Shared.Constants;
+namespace NIOP.Provider.ContractTests.Constants;
 
 /// <summary>
-/// Centralized constants for Pact contract testing configuration.
-/// Ensures consistency across all consumer and provider test projects.
+/// Constants for Provider Pact contract verification.
 /// </summary>
 public static class PactConstants
 {
@@ -14,26 +13,11 @@ public static class PactConstants
 
     /// <summary>
     /// Consumer names for each consuming system.
-    /// Used as participant names in Pact Broker.
     /// </summary>
     public static class Consumers
     {
         public const string Salesforce = "Salesforce-Consumer";
         public const string PCAW = "PCAW-Consumer";
-        public const string Soraian = "Soraian-Consumer";
-        public const string MSA = "MSA-Consumer";
-        public const string INR = "INR-Consumer";
-        public const string ATS = "ATS-Consumer";
-        public const string Cardiologs = "Cardiologs-Consumer";
-        public const string EMR = "EMR-Consumer";
-    }
-
-    /// <summary>
-    /// API endpoint paths.
-    /// </summary>
-    public static class Endpoints
-    {
-        public const string UpdateDeviceInformation = "/api/UpdateDeviceInformation";
     }
 
     /// <summary>
@@ -55,24 +39,23 @@ public static class PactConstants
     public static class PactOutput
     {
         public const string DefaultPactDir = "pacts";
-        public const string DefaultLogDir = "logs";
 
         /// <summary>
         /// Resolves the pact output directory by finding the solution root.
         /// Traverses up from the current assembly's location until it finds
-        /// the NIOP.ContractTesting.sln file, then returns the pacts subdirectory.
+        /// the NIOP.Provider.sln file, then returns the pacts subdirectory.
         /// </summary>
         public static string GetPactDirectory()
         {
             var dir = Path.GetDirectoryName(typeof(PactConstants).Assembly.Location);
-            while (dir != null && !File.Exists(Path.Combine(dir, "NIOP.ContractTesting.sln")))
+            while (dir != null && !File.Exists(Path.Combine(dir, "NIOP.Provider.sln")))
             {
                 dir = Path.GetDirectoryName(dir);
             }
 
             if (dir == null)
                 throw new DirectoryNotFoundException(
-                    "Could not find solution root directory. Ensure NIOP.ContractTesting.sln exists in a parent directory.");
+                    "Could not find solution root directory. Ensure NIOP.Provider.sln exists in a parent directory.");
 
             var pactDir = Path.Combine(dir, DefaultPactDir);
             Directory.CreateDirectory(pactDir);

@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace NIOP.Contracts.Shared.Models;
+namespace NIOP.Provider.Api.Models;
 
 /// <summary>
 /// Request model for UpdateDeviceInformation API endpoint.
@@ -13,7 +13,6 @@ public class UpdateDeviceInformationRequest
     /// The serial number of the device to update.
     /// Must be a valid, existing serial number in the NIOP inventory.
     /// </summary>
-    /// <example>SN-2024-001234</example>
     public string SerialNumber { get; set; } = string.Empty;
 
     /// <summary>
@@ -21,7 +20,6 @@ public class UpdateDeviceInformationRequest
     /// This is the field impacted by NIOP part number changes.
     /// Required by the provider for device updates.
     /// </summary>
-    /// <example>PN-BEAT-5678-REV2</example>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? NewPartNumber { get; set; }
 
@@ -29,16 +27,11 @@ public class UpdateDeviceInformationRequest
     /// The username of the person/system performing the update.
     /// Used for audit trail and change tracking.
     /// </summary>
-    /// <example>system.salesforce</example>
     public string Username { get; set; } = string.Empty;
 
     /// <summary>
     /// The organization associated with the device update.
-    /// Required field introduced for organizational tracking.
-    /// When not provided by consumers, this field is omitted from serialization,
-    /// allowing consumer pact tests to pass while provider verification correctly fails.
     /// </summary>
-    /// <example>philips</example>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Org { get; set; }
 }

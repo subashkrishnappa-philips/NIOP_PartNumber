@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Moq;
-using NIOP.Contracts.Shared.Models;
+using NIOP.Provider.Api.Models;
 using NIOP.Provider.Api.Services;
 
 namespace NIOP.Provider.ContractTests.Fixtures;
