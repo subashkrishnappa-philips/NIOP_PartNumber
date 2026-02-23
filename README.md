@@ -269,6 +269,8 @@ docker-compose -f infrastructure/docker-compose.pact-broker.yml down
 
 See [docs/PACT_BROKER_GUIDE.md](docs/PACT_BROKER_GUIDE.md) for full broker operations.
 
+For testing purpose, i have not hosted a entire pact_broker setup, i have re-used the available PACT_BROKER from PACTFLOW
+https://docs.pact.io/university/introduction/step13
 ---
 
 ## GitHub Actions CI/CD
