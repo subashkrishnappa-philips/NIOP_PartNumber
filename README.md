@@ -13,12 +13,13 @@
 4. [Quick Start](#quick-start)
 5. [API Under Test](#api-under-test)
 6. [Running Tests Locally](#running-tests-locally)
-7. [Pact Broker Setup](#pact-broker-setup)
-8. [GitHub Actions CI/CD](#github-actions-cicd)
-9. [How Contract Testing Works](#how-contract-testing-works)
-10. [Troubleshooting](#troubleshooting)
-11. [Best Practices](#best-practices)
-12. [Glossary](#glossary)
+7. [Swagger Mock Validator](#swagger-mock-validator)
+8. [Pact Broker Setup](#pact-broker-setup)
+9. [GitHub Actions CI/CD](#github-actions-cicd)
+10. [How Contract Testing Works](#how-contract-testing-works)
+11. [Troubleshooting](#troubleshooting)
+12. [Best Practices](#best-practices)
+13. [Glossary](#glossary)
 
 ---
 
@@ -36,6 +37,7 @@ Consumer tests live in their own repositories and publish pacts to the Pact Brok
 | Endpoint Under Test | `POST /api/UpdateDeviceInformation` |
 | Framework | .NET 10.0, PactNet 5.0.0, xUnit 2.6.2 |
 | CI/CD Pipeline | 1 GitHub Actions workflow (5 jobs) |
+| Swagger Validation | `PactSwaggerValidator` (pure C#, `Microsoft.OpenApi.Readers`) |
 
 ---
 
@@ -86,7 +88,7 @@ NIOP_PartNumberEndpoints/
 │   │   ├── Controllers/
 │   │   │   └── DeviceController.cs       # UpdateDeviceInformation endpoint
 │   │   ├── Models/
-│   │   │   ├── UpdateDeviceInformationRequest.cs
+│   │   │   ├── UpdateDeviceInformationRequest.cs  # [Required] annotations for OpenAPI
 │   │   │   └── UpdateDeviceInformationResponse.cs
 │   │   ├── Services/
 │   │   │   ├── IDeviceService.cs
@@ -99,6 +101,9 @@ NIOP_PartNumberEndpoints/
 │       │   └── PactConstants.cs          # Provider/consumer names, broker config
 │       ├── Fixtures/
 │       │   └── ProviderWebApplicationFactory.cs  # Real Kestrel host with mocked services
+│       ├── Validation/
+│       │   └── PactSwaggerValidator.cs   # Pure C# swagger mock validator engine
+│       ├── SwaggerMockValidatorTests.cs  # Swagger-vs-Pact compatibility tests
 │       └── ProviderContractTests.cs      # Pact verification test methods
 │
 ├── pacts/                                # Local pact JSON files (for dev/testing)
@@ -136,7 +141,25 @@ dotnet restore NIOP.Provider.sln
 dotnet build NIOP.Provider.sln
 ```
 
-### Step 2: Run Provider Verification (Local Pacts)
+### Step 2: Generate Pact Files (Consumer Side)
+
+Pact files must exist in `pacts/` before running provider or swagger tests.
+Run the consumer tests to generate them, then copy to the provider:
+
+```powershell
+# Generate pact files
+cd ..
+cd NIOP_PARTNUMBERENDPOINTS_CONSUMER
+dotnet test src/Consumer.PCAW.ContractTests --configuration Release
+
+# Copy pact files to provider (for local dev — in CI this comes from the Pact Broker)
+cd ..
+cd NIOP_PartNumberEndpoints
+New-Item -ItemType Directory -Force -Path pacts
+Copy-Item ..\ NIOP_PARTNUMBERENDPOINTS_CONSUMER\pacts\*.json pacts\
+```
+
+### Step 3: Run Provider Verification (Local Pacts)
 
 ```bash
 dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj --configuration Release
@@ -144,7 +167,17 @@ dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests
 
 This verifies the provider against pact files in the `pacts/` directory.
 
-### Step 3: Run Provider Verification (Pact Broker)
+### Step 4: Run Swagger Mock Validation
+
+```powershell
+# Via the helper script (pure C# — no Node.js)
+.\validate-swagger-pacts.ps1
+
+# Or directly
+dotnet test src/Provider/NIOP.Provider.ContractTests --filter "DisplayName~OpenAPI"
+```
+
+### Step 5: Run Provider Verification (Pact Broker)
 
 ```powershell
 $env:PACT_BROKER_BASE_URL = "http://localhost:9292"
@@ -155,7 +188,7 @@ $env:PROVIDER_VERSION = "1.0.0-local"
 dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj --configuration Release
 ```
 
-### Step 4: View Results
+### Step 6: View Results
 
 Open http://localhost:9292 in your browser to see the Pact Broker dashboard.
 
@@ -234,6 +267,54 @@ dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests
 dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj --filter "DisplayName~individual"
 ```
 
+### Run Swagger Mock Validation
+
+```powershell
+# Helper script (no Node.js required)
+.\validate-swagger-pacts.ps1
+
+# Or directly
+dotnet test src/Provider/NIOP.Provider.ContractTests `
+  --filter "DisplayName~OpenAPI" --verbosity normal
+```
+
+---
+
+## Swagger Mock Validator
+
+On top of standard Pact verification, this project includes a **pure C# Swagger Mock Validator** that cross-checks every Pact consumer interaction against the provider's OpenAPI specification.
+
+### Why Two Layers?
+
+| Layer | What it catches |
+|---|---|
+| **Pact verification** (`ProviderContractTests`) | Consumer expectations replayed against the running provider |
+| **Swagger Mock Validator** (`SwaggerMockValidatorTests`) | Schema drift: body fields not in the spec, wrong types, undocumented status codes |
+
+### How It Works
+
+```
+1. WebApplicationFactory<Program> starts in-process
+2. GET /swagger/v1/swagger.json fetched from the live test server
+3. pacts/*.json loaded from disk
+4. PactSwaggerValidator.Validate(swaggerJson, pactJson) called for each pact:
+   ├─ HTTP method + path declared in spec?
+   ├─ All required request fields present in Pact body?
+   ├─ All Pact request fields exist in spec schema?
+   ├─ Response status code declared?
+   ├─ All required response fields present?
+   └─ Property types match (string/bool/int/object/array)?
+5. Assert zero failures
+```
+
+### Implementation (No Node.js)
+
+| Component | Description |
+|---|---|
+| `Validation/PactSwaggerValidator.cs` | Core validator built on `Microsoft.OpenApi.Readers` |
+| `SwaggerMockValidatorTests.cs` | xUnit test that wires swagger + pacts and asserts |
+| `validate-swagger-pacts.ps1` | CI/local PowerShell wrapper — calls `dotnet test` |
+
 ---
 
 ## Pact Broker Setup
@@ -283,32 +364,31 @@ See [docs/PACT_BROKER_GUIDE.md](docs/PACT_BROKER_GUIDE.md) for full broker opera
 ### Pipeline Flow
 
 ```
-┌────────────────────────┐
-│  verify-provider       │  Build + run provider contract tests
-│  (all branches)        │  against Pact Broker pacts
-└──────────┬─────────────┘
+Job: verify-provider (all branches)
+│
+├─ Build provider + tests
+├─ Validate Pact Broker credentials
+├─ Download pact files from Pact Broker → pacts/   ← fetches pacts into provider checkout
+├─ Swagger / OpenAPI Mock Validation              ← --filter "DisplayName~OpenAPI"
+│    checks schema, types, required fields, status codes
+├─ Verify consumer pacts from Pact Broker         ← --filter "DisplayName!~OpenAPI"
+│    replays all interactions against the running API
+└─ Upload test result artifacts
            │
            ▼
-┌────────────────────────┐
-│  can-i-deploy          │  Ask Pact Broker: safe to deploy?
-│  (main/develop)        │
-└──────────┬─────────────┘
+Job: can-i-deploy (main/develop only)
+│    Ask Pact Broker: safe to deploy?
            │
            ▼
-┌────────────────────────┐
-│  deploy-provider       │  Build release artifact + deploy
-│  (main only)           │
-└──────────┬─────────────┘
+Job: deploy-provider (main only)
+│    Build release artifact + deploy
            │
            ▼
-┌────────────────────────┐
-│  record-deployment     │  Tell Pact Broker: deployed to prod
-│  (main only)           │
-└────────────────────────┘
+Job: record-deployment (main only)
+│    Tell Pact Broker: deployed to prod
 
-┌────────────────────────┐
-│  notify-failure        │  Generate failure summary (on error)
-└────────────────────────┘
+Job: notify-failure (on error)
+     Generate failure summary with named causes (pact or swagger)
 ```
 
 ### Required GitHub Secrets
@@ -358,6 +438,9 @@ See [docs/PACT_BROKER_GUIDE.md](docs/PACT_BROKER_GUIDE.md) for full broker opera
 | "No pacts found" from broker | No pacts published yet | Publish consumer pacts to broker first |
 | Pact Broker connection refused | Docker not running | Start Docker Desktop, run setup script |
 | `can-i-deploy` fails | Verification not yet recorded | Run provider verification tests first |
+| Swagger test: pact dir not found (local) | Consumer pacts not copied locally | Run consumer tests then copy `NIOP_PARTNUMBERENDPOINTS_CONSUMER\pacts\*.json` into `NIOP_PartNumberEndpoints\pacts\` |
+| Swagger test: pact dir not found (CI) | Pipeline download step failed | Check `PACT_BROKER_BASE_URL` secret and that consumer pacts have been published to the Broker |
+| Swagger test: required field missing | Pact omits a `[Required]` field | Add the field to the consumer pact interaction |
 
 ### Debugging Provider Verification
 
@@ -370,12 +453,13 @@ dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests
 ## Best Practices
 
 1. **Run provider verification on every PR** before merging API changes
-2. **Use `can-i-deploy`** — never deploy without checking the Pact Broker
-3. **Set up webhooks** — automatically verify when consumers publish new pacts
-4. **Use provider states** in `ProviderWebApplicationFactory.cs` for consumer test preconditions
-5. **Communicate breaking changes** to consumer teams proactively
-6. **Keep contracts minimal** — consumers should only assert on fields they use
-7. **Tag releases** — use `record-deployment` to track what's deployed
+2. **Run swagger mock validation on every PR** — catches schema drift Pact alone misses
+3. **Use `can-i-deploy`** — never deploy without checking the Pact Broker
+4. **Set up webhooks** — automatically verify when consumers publish new pacts
+5. **Use provider states** in `ProviderWebApplicationFactory.cs` for consumer test preconditions
+6. **Communicate breaking changes** to consumer teams proactively
+7. **Keep contracts minimal** — consumers should only assert on fields they use
+8. **Tag releases** — use `record-deployment` to track what's deployed
 
 ---
 
@@ -392,6 +476,8 @@ dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests
 | **can-i-deploy** | Pact Broker CLI command checking if a version is safe to deploy |
 | **Pending Pacts** | New pacts not yet verified (won't fail the build) |
 | **Consumer Version Selector** | Rules for which consumer pact versions to verify |
+| **Swagger Mock Validator** | Tool (here: pure C#) that checks Pact interactions against an OpenAPI spec |
+| **Schema Drift** | When the OpenAPI spec diverges from what the Pact contract actually tests |
 
 ---
 

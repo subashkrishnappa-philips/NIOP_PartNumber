@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
 
 namespace NIOP.Provider.Api.Models;
@@ -13,6 +14,7 @@ public class UpdateDeviceInformationRequest
     /// The serial number of the device to update.
     /// Must be a valid, existing serial number in the NIOP inventory.
     /// </summary>
+    [Required]
     public string SerialNumber { get; set; } = string.Empty;
 
     /// <summary>
@@ -27,6 +29,7 @@ public class UpdateDeviceInformationRequest
     /// The username of the person/system performing the update.
     /// Used for audit trail and change tracking.
     /// </summary>
+    [Required]
     public string Username { get; set; } = string.Empty;
 
     /// <summary>
