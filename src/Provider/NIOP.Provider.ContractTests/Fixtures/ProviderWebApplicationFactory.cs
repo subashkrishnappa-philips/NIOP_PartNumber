@@ -1,21 +1,24 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Moq;
-using NIOP.Provider.Api.Models;
 using NIOP.Provider.Api.Services;
 
 namespace NIOP.Provider.ContractTests.Fixtures;
 
 /// <summary>
 /// Custom WebApplicationFactory for Provider contract tests.
-/// Sets up the provider API with mocked dependencies for Pact verification.
-/// 
+/// Sets up the provider API with real services for Pact verification.
+///
 /// PactNet verifier requires a real HTTP endpoint (not an in-memory TestServer),
 /// so we configure Kestrel to listen on a random available port.
+///
+/// The real DeviceService is used intentionally — it has no external dependencies
+/// (pure in-memory validation, no database), so it is safe to use in tests and
+/// avoids brittle Moq predicate-matching that can fail when JSON deserialization
+/// produces empty strings instead of null on some runtimes.
 /// </summary>
 public class ProviderWebApplicationFactory : WebApplicationFactory<Program>
 {
@@ -26,8 +29,6 @@ public class ProviderWebApplicationFactory : WebApplicationFactory<Program>
     /// The URI where the provider is listening on a real network port.
     /// </summary>
     public Uri ServerUri => new($"http://localhost:{_port}");
-
-    public Mock<IDeviceService> MockDeviceService { get; } = new();
 
     public ProviderWebApplicationFactory()
     {
@@ -45,70 +46,6 @@ public class ProviderWebApplicationFactory : WebApplicationFactory<Program>
     {
         if (_kestrelHost != null) return;
 
-        // Mock successful response for valid requests (including NewPartNumber)
-        MockDeviceService
-            .Setup(s => s.UpdateDeviceInformationAsync(It.Is<UpdateDeviceInformationRequest>(req =>
-                !string.IsNullOrWhiteSpace(req.SerialNumber) &&
-                !string.IsNullOrWhiteSpace(req.NewPartNumber) &&
-                !string.IsNullOrWhiteSpace(req.Username) &&
-                !string.IsNullOrWhiteSpace(req.Org))))
-            .ReturnsAsync(new UpdateDeviceInformationResponse
-            {
-                Success = true,
-                Message = "Device information updated successfully.",
-                CorrelationId = "test-correlation-id-success-001"
-            });
-
-        // Mock failure for requests missing SerialNumber
-        MockDeviceService
-            .Setup(s => s.UpdateDeviceInformationAsync(It.Is<UpdateDeviceInformationRequest>(req =>
-                string.IsNullOrWhiteSpace(req.SerialNumber))))
-            .ReturnsAsync(new UpdateDeviceInformationResponse
-            {
-                Success = false,
-                Message = "Serial number is required.",
-                CorrelationId = "test-correlation-id-error-001"
-            });
-
-        // Mock failure for requests missing Username
-        MockDeviceService
-            .Setup(s => s.UpdateDeviceInformationAsync(It.Is<UpdateDeviceInformationRequest>(req =>
-                !string.IsNullOrWhiteSpace(req.SerialNumber) &&
-                string.IsNullOrWhiteSpace(req.Username))))
-            .ReturnsAsync(new UpdateDeviceInformationResponse
-            {
-                Success = false,
-                Message = "Username is required.",
-                CorrelationId = "test-correlation-id-error-002"
-            });
-
-        // Mock failure for requests missing NewPartNumber
-        MockDeviceService
-            .Setup(s => s.UpdateDeviceInformationAsync(It.Is<UpdateDeviceInformationRequest>(req =>
-                !string.IsNullOrWhiteSpace(req.SerialNumber) &&
-                !string.IsNullOrWhiteSpace(req.Username) &&
-                string.IsNullOrWhiteSpace(req.NewPartNumber))))
-            .ReturnsAsync(new UpdateDeviceInformationResponse
-            {
-                Success = false,
-                Message = "New part number is required.",
-                CorrelationId = "test-correlation-id-error-003"
-            });
-
-        // Mock failure for requests missing Org
-        MockDeviceService
-            .Setup(s => s.UpdateDeviceInformationAsync(It.Is<UpdateDeviceInformationRequest>(req =>
-                !string.IsNullOrWhiteSpace(req.SerialNumber) &&
-                !string.IsNullOrWhiteSpace(req.Username) &&
-                !string.IsNullOrWhiteSpace(req.NewPartNumber) &&
-                string.IsNullOrWhiteSpace(req.Org))))
-            .ReturnsAsync(new UpdateDeviceInformationResponse
-            {
-                Success = false,
-                Message = "Org is required.",
-                CorrelationId = "test-correlation-id-error-003"
-            });
-
         _kestrelHost = Host.CreateDefaultBuilder()
             .ConfigureWebHostDefaults(webBuilder =>
             {
@@ -123,7 +60,17 @@ public class ProviderWebApplicationFactory : WebApplicationFactory<Program>
                         })
                         .AddApplicationPart(typeof(NIOP.Provider.Api.Controllers.DeviceController).Assembly);
 
-                    services.AddScoped<IDeviceService>(_ => MockDeviceService.Object);
+                    // Suppress ASP.NET Core's automatic 400 ValidationProblemDetails response
+                    // so requests with empty/missing required fields reach DeviceService,
+                    // which returns the { Success, Message, CorrelationId } format Pact consumers expect.
+                    services.Configure<ApiBehaviorOptions>(options =>
+                    {
+                        options.SuppressModelStateInvalidFilter = true;
+                    });
+
+                    // Use the real DeviceService — it is pure in-memory validation with no
+                    // external dependencies, so it is safe and correct in contract tests.
+                    services.AddScoped<IDeviceService, DeviceService>();
                 });
                 webBuilder.Configure(app =>
                 {

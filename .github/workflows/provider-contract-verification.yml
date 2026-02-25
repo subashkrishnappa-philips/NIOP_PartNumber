@@ -79,6 +79,10 @@ jobs:
       - name: Build provider + tests
         run: dotnet build src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj --no-restore --configuration Release
 
+      # ----------------------------------------------------------------
+      # Validate Pact Broker credentials early — both Swagger validation
+      # and Pact verification need pact files fetched from the Broker.
+      # ----------------------------------------------------------------
       - name: Validate Pact Broker credentials
         id: broker-auth
         run: |
@@ -99,6 +103,90 @@ jobs:
             exit 1
           fi
           echo "Pact Broker URL configured — will fetch consumer-generated pacts from broker"
+
+      # ----------------------------------------------------------------
+      # Download pact files from the Pact Broker into the local pacts/
+      # directory so the Swagger validator can read them from disk.
+      # Uses jq (pre-installed on GitHub-hosted runners) to parse the
+      # Pact Broker HAL response. Fails loudly if no pacts are found.
+      # ----------------------------------------------------------------
+      - name: "Download pact files from Pact Broker"
+        id: download-pacts
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+          PACT_BROKER_USERNAME: ${{ secrets.PACT_BROKER_USERNAME }}
+          PACT_BROKER_PASSWORD: ${{ secrets.PACT_BROKER_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p pacts
+
+          BROKER_URL="${PACT_BROKER_BASE_URL}"
+          PROVIDER="NIOP-Beat-Inventory-Api"
+
+          # Build auth header
+          if [ -n "${PACT_BROKER_TOKEN:-}" ]; then
+            AUTH_ARGS=(-H "Authorization: Bearer ${PACT_BROKER_TOKEN}")
+          else
+            AUTH_ARGS=(-u "${PACT_BROKER_USERNAME}:${PACT_BROKER_PASSWORD}")
+          fi
+
+          echo "Fetching latest pacts for provider '${PROVIDER}' from ${BROKER_URL}..."
+
+          # The Pact Broker HAL endpoint returns _links.pacts as an array of {href, name, ...}
+          # jq handles both array and single-object cases with `[.[]]` normalisation.
+          HAL_RESPONSE=$(curl -sf "${AUTH_ARGS[@]}" \
+            -H "Accept: application/hal+json" \
+            "${BROKER_URL}/pacts/provider/${PROVIDER}/latest")
+
+          PACT_URLS=$(echo "${HAL_RESPONSE}" | \
+            jq -r '[ ._links.pacts | if type=="array" then .[] else . end ] | .[].href')
+
+          if [ -z "${PACT_URLS}" ]; then
+            echo "::error::No pacts found on the Pact Broker for provider '${PROVIDER}'."
+            echo "::error::Ensure the consumer pipeline has run and published pacts to ${BROKER_URL} before the provider pipeline."
+            exit 1
+          fi
+
+          # Download each pact, naming it {consumer}-{provider}.json
+          while IFS= read -r PACT_URL; do
+            # Extract consumer name from URL segment: /consumer/{name}/
+            CONSUMER=$(echo "${PACT_URL}" | grep -oP '(?<=/consumer/)[^/]+')
+            FILENAME="${CONSUMER}-${PROVIDER}.json"
+            echo "  Downloading: ${PACT_URL} -> pacts/${FILENAME}"
+            curl -sf "${AUTH_ARGS[@]}" "${PACT_URL}" -o "pacts/${FILENAME}"
+          done <<< "${PACT_URLS}"
+
+          echo ""
+          echo "=== Pact files downloaded ==="
+          ls -la pacts/*.json
+
+      # ----------------------------------------------------------------
+      # Swagger / OpenAPI Mock Validation
+      # Validates that every Pact interaction is compatible with the
+      # official OpenAPI spec generated from the provider source code.
+      # Pact files were downloaded from the Broker in the previous step.
+      # ----------------------------------------------------------------
+      - name: "Swagger / OpenAPI Mock Validation"
+        id: swagger-validation
+        run: |
+          echo "Validating Pact interactions against the OpenAPI/Swagger specification..."
+          dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj \
+            --configuration Release \
+            --no-build \
+            --filter "DisplayName~OpenAPI" \
+            --logger "trx;LogFileName=swagger-validation-results.trx" \
+            --results-directory ./test-results \
+            --verbosity normal
+
+      - name: Upload swagger validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swagger-validation-results
+          path: ./test-results/swagger-validation-results.trx
+          retention-days: 30
 
       # ----------------------------------------------------------------
       # Verify consumer-generated pacts fetched from the Pact Broker.
@@ -125,6 +213,7 @@ jobs:
           dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj \
             --configuration Release \
             --no-build \
+            --filter "DisplayName!~OpenAPI" \
             --logger "trx;LogFileName=provider-verification-results.trx" \
             --results-directory ./test-results \
             --verbosity normal
@@ -144,7 +233,8 @@ jobs:
     name: "Can Provider Deploy?"
     runs-on: ubuntu-latest
     needs: verify-provider
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    # Run on direct pushes to main/develop AND on pull requests targeting those branches.
+    if: needs.verify-provider.result == 'success' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'develop')))
     steps:
       - name: Install Pact CLI
         run: |
@@ -159,6 +249,55 @@ jobs:
           else
             echo "target=staging" >> $GITHUB_OUTPUT
           fi
+
+      - name: Ensure Pact Broker environments exist
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+          PACT_BROKER_USERNAME: ${{ secrets.PACT_BROKER_USERNAME }}
+          PACT_BROKER_PASSWORD: ${{ secrets.PACT_BROKER_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          BROKER_URL="${PACT_BROKER_BASE_URL}"
+
+          # Build curl auth args
+          if [ -n "${PACT_BROKER_TOKEN:-}" ]; then
+            CURL_AUTH=(-H "Authorization: Bearer ${PACT_BROKER_TOKEN}")
+          else
+            CURL_AUTH=(-u "${PACT_BROKER_USERNAME}:${PACT_BROKER_PASSWORD}")
+          fi
+
+          create_environment() {
+            local name="$1"
+            local is_production="$2"
+            local display_name="$3"
+
+            echo "Ensuring '${name}' environment exists..."
+            HTTP_STATUS=$(curl -s -o /tmp/env_response.json -w "%{http_code}" \
+              -X POST "${BROKER_URL}/environments" \
+              "${CURL_AUTH[@]}" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\":\"${name}\",\"displayName\":\"${display_name}\",\"production\":${is_production}}")
+
+            case "$HTTP_STATUS" in
+              200|201)
+                echo "  Created '${name}' environment (HTTP ${HTTP_STATUS})"
+                ;;
+              409|422|400)
+                # 409 = already exists, 422/400 can also mean duplicate on some broker versions
+                echo "  '${name}' environment already exists (HTTP ${HTTP_STATUS}) — OK"
+                ;;
+              *)
+                echo "  ERROR: Unexpected HTTP ${HTTP_STATUS} when creating '${name}' environment"
+                cat /tmp/env_response.json || true
+                exit 1
+                ;;
+            esac
+          }
+
+          create_environment "production" "true"  "Production"
+          create_environment "staging"    "false" "Staging"
 
       - name: "Can NIOP-Beat-Inventory-Api deploy?"
         run: |
@@ -186,7 +325,9 @@ jobs:
     name: "Deploy Provider"
     runs-on: ubuntu-latest
     needs: can-i-deploy
-    if: github.ref == 'refs/heads/main'
+    # Only deploy on a direct push/merge to main (not on PRs).
+    # GitHub auto-skips this if can-i-deploy failed or was skipped.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     steps:
       - name: Checkout provider code
         uses: actions/checkout@v4
@@ -213,7 +354,9 @@ jobs:
     name: "Record Provider Deployment"
     runs-on: ubuntu-latest
     needs: deploy-provider
-    if: github.ref == 'refs/heads/main'
+    # Only record deployment after a real deploy on main (not on PRs).
+    # GitHub auto-skips this if deploy-provider failed or was skipped.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     steps:
       - name: Install Pact CLI
         run: |
@@ -253,3 +396,8 @@ jobs:
           echo "**Provider:** NIOP-Beat-Inventory-Api" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Possible causes" >> $GITHUB_STEP_SUMMARY
+          echo "- Pact contract mismatch (check provider-verification-results artifact)" >> $GITHUB_STEP_SUMMARY
+          echo "- Swagger/OpenAPI schema mismatch (check swagger-validation-results artifact)" >> $GITHUB_STEP_SUMMARY
+          echo "- Pact Broker credentials missing or invalid" >> $GITHUB_STEP_SUMMARY

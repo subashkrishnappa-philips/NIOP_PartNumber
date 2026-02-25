@@ -41,8 +41,8 @@ As the API provider, you must:
 
 ### Running Verification Locally
 
-```bash
-# Against local pact files (in pacts/ directory)
+```powershell
+# Against local pact files (copy from consumer first — see below)
 dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj --configuration Release
 
 # Against Pact Broker
@@ -56,6 +56,60 @@ dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests
 dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj --filter "DisplayName~Pact Broker"
 ```
 
+#### Generating Local Pact Files (first time / after consumer changes)
+
+```powershell
+# 1. Generate pacts from consumer tests
+cd ..
+cd NIOP_PARTNUMBERENDPOINTS_CONSUMER
+dotnet test src/Consumer.PCAW.ContractTests/Consumer.PCAW.ContractTests.csproj --configuration Release
+
+# 2. Copy to provider pacts/ directory
+cd ..
+cd NIOP_PartNumberEndpoints
+New-Item -ItemType Directory -Force -Path pacts
+Copy-Item ..\NIOP_PARTNUMBERENDPOINTS_CONSUMER\pacts\*.json pacts\
+```
+
+---
+
+## Swagger Mock Validation
+
+An additional validation layer cross-checks every Pact interaction against the provider's OpenAPI specification.
+**Entirely pure C# — no Node.js, no npm, no `npx`.**
+
+### Running Swagger Mock Validation
+
+```powershell
+# PowerShell helper script (recommended)
+.\validate-swagger-pacts.ps1
+
+# Or directly
+dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests.csproj `
+  --filter "DisplayName~OpenAPI" --verbosity normal
+```
+
+### What It Checks
+
+| Check | Description |
+|---|---|
+| Path + method declared | The Pact’s HTTP method and path exist in the OpenAPI spec |
+| Required request fields | All `[Required]` request-body properties are present in the Pact |
+| Unknown request fields | Pact doesn’t use properties absent from the schema |
+| Response status code | The Pact’s response status is declared in the spec |
+| Required response fields | All required response-body properties are present in the Pact |
+| Property types | Field types match (`string`, `boolean`, `integer`, `number`, `object`, `array`) |
+
+### Typical Failure Output
+
+```
+[FAIL] PCAW: Successfully updates device part number during patient workflow
+       • [request.body] required property 'NewPartNumber' is missing.
+
+[FAIL] PCAW: Receives error when serial number is empty
+       • Response status 422 is not declared in the spec’s responses (200, 400).
+```
+
 ---
 
 ## Key Source Files
@@ -63,11 +117,13 @@ dotnet test src/Provider/NIOP.Provider.ContractTests/NIOP.Provider.ContractTests
 | File | Purpose |
 |------|---------|
 | `ProviderContractTests.cs` | Pact verification test methods (broker + local file) |
+| `SwaggerMockValidatorTests.cs` | Cross-checks every Pact interaction against the OpenAPI spec (pure C#) |
+| `Validation/PactSwaggerValidator.cs` | Core validation engine — uses `Microsoft.OpenApi.Readers`, no Node.js |
 | `ProviderWebApplicationFactory.cs` | Real Kestrel host with mocked `IDeviceService` |
 | `PactConstants.cs` | Provider/consumer names, broker config, pact directory resolution |
 | `DeviceController.cs` | The API endpoint under contract |
 | `DeviceService.cs` | Business logic with validation rules |
-| `UpdateDeviceInformationRequest.cs` | Request model (SerialNumber, NewPartNumber, Username, Org) |
+| `UpdateDeviceInformationRequest.cs` | Request model — `[Required]` on SerialNumber + Username for accurate OpenAPI schema |
 | `UpdateDeviceInformationResponse.cs` | Response model (Success, Message, CorrelationId) |
 
 ---
@@ -169,12 +225,18 @@ The provider verification runs automatically via GitHub Actions (`provider-contr
 2. **On webhook** from Pact Broker (consumer pact changes)
 3. **On manual trigger** (on-demand verification)
 
-Pipeline jobs:
-- **verify-provider** → runs contract tests against broker
-- **can-i-deploy** → checks Pact Broker compatibility matrix
+Pipeline steps inside `verify-provider`:
+1. Build provider + tests
+2. Validate Pact Broker credentials
+3. **Download pact files from Pact Broker** → writes them to `pacts/` in the provider checkout
+4. **Swagger / OpenAPI Mock Validation** — reads pacts downloaded in step 3, checks schema against live swagger.json
+5. **Verify consumer pacts from Pact Broker** — replays all interactions against the running API
+
+Downstream jobs:
+- **can-i-deploy** → checks Pact Broker compatibility matrix (main/develop only)
 - **deploy-provider** → builds and deploys (main only)
-- **record-deployment** → records the deployment in the broker
-- **notify-failure** → generates failure summary on error
+- **record-deployment** → records the deployment in the broker (main only)
+- **notify-failure** → generates failure summary with named cause (pact mismatch or swagger schema mismatch)
 
 ---
 
